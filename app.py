@@ -10,7 +10,14 @@ import pandas as pd
 # 0) CONFIG / ENV
 # ============================================================
 load_dotenv()
-API_URL = os.getenv("GRAZEGAUGE_API_URL", "").rstrip("/")
+
+API_URL = os.getenv("GRAZEGAUGE_API_URL")
+
+# fallback to Streamlit secrets if env var not set
+if not API_URL and "GRAZEGAUGE_API_URL" in st.secrets:
+    API_URL = st.secrets["GRAZEGAUGE_API_URL"]
+
+API_URL = (API_URL or "").rstrip("/")
 
 # ============================================================
 # 1) HELPER: Pretty rendering of predictions (nested JSON aware)
