@@ -4,9 +4,11 @@
 # This is the front-end. Heavy calculations go in the back-end, no?
 
 # Sreamlit and extensions
+
 streamlit
 requests
-
+pillow
+python-dotenv
 
 # If you want to display datasets, or if your API returns you dataframes,
 # you might need to add some extra stuff hereunder, e.g. pandas
