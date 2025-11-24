@@ -204,7 +204,7 @@ def _render_comparison_result(state: Dict[str, Any]) -> None:
     # Image display
     img_path = example.get("image_path")
     if img_path:
-        st.image(img_path, use_column_width=True)
+        st.image(img_path, use_container_width=True)
     else:
         st.warning("No image_path provided for this validation example.")
 
@@ -339,7 +339,7 @@ def _render_explainability_section(state: Dict[str, Any], example: Dict[str, Any
     with col1:
         st.markdown(f"**Model 1: {model_1_name}**")
         if map1_path:
-            st.image(map1_path, use_column_width=True)
+            st.image(map1_path, use_container_width=True)
         else:
             st.warning(
                 f"No explainability map found for {model_1_name} ({focus})."
@@ -348,7 +348,7 @@ def _render_explainability_section(state: Dict[str, Any], example: Dict[str, Any
     with col2:
         st.markdown(f"**Model 2: {model_2_name}**")
         if map2_path:
-            st.image(map2_path, use_column_width=True)
+            st.image(map2_path, use_container_width=True)
         else:
             st.warning(
                 f"No explainability map found for {model_2_name} ({focus})."

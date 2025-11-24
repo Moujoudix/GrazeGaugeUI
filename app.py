@@ -11,32 +11,26 @@ def setup_page() -> None:
     st.set_page_config(
         page_title=APP_TITLE,
         layout="wide",
-        initial_sidebar_state="expanded",
+        initial_sidebar_state="collapsed",
     )
 
 
 def render_header() -> None:
     st.title(APP_TITLE)
     st.caption(APP_SUBTITLE)
-    st.markdown("---")
 
 
-def render_sidebar() -> str:
-    st.sidebar.title("Navigation")
-    page = st.sidebar.radio(
-        "Go to",
+def render_top_nav() -> str:
+    """
+    Top navigation bar, horizontally, above the page content.
+    """
+    page = st.radio(
+        "Navigation",
         options=["Predict", "Educational Lab", "About & Credits"],
         index=0,
+        horizontal=True,
     )
-
-    st.sidebar.markdown("---")
-    st.sidebar.markdown(
-        """
-**GrazeGauge**\n
-Capstone project - computer vision for pasture biomass.
-"""
-    )
-
+    st.markdown("---")
     return page
 
 
@@ -51,19 +45,18 @@ def main() -> None:
     setup_page()
     init_session_state()
 
-    page = render_sidebar()
+    # Header + top navigation
+    render_header()
+    page = render_top_nav()
 
+    # Page content
     if page == "Predict":
-        render_header()
         render_predict_page()
     elif page == "Educational Lab":
-        render_header()
         render_educational_lab_page()
     elif page == "About & Credits":
-        render_header()
         render_about_page()
     else:
-        render_header()
         st.error("Unknown page selected.")
 
 

@@ -42,68 +42,74 @@ def init_predict_state() -> None:
 # Core page entrypoint
 # -----------------------------------------------------------------------------
 def render_predict_page() -> None:
+    """
+    Predict page layout:
+
+    - Top: controls area in two columns
+      - Left: upload + run + advanced toggle
+      - Right: model config + AUX + description
+    - Below: results section (single or multi-image)
+    """
     init_predict_state()
     state = st.session_state["predict_state"]
 
-    col_left, col_right = st.columns([1, 2])
-
-    with col_left:
-        _render_predict_controls(state)
-
-    with col_right:
-        _render_predict_results(state)
+    _render_predict_controls(state)
+    st.markdown("---")
+    _render_predict_results(state)
 
 
 # -----------------------------------------------------------------------------
-# Left column: controls
+# Controls area (top)
 # -----------------------------------------------------------------------------
 def _render_predict_controls(state: Dict[str, Any]) -> None:
-    st.subheader("1. Upload images")
+    """
+    Top controls layout:
 
-    uploaded_files = st.file_uploader(
-        "Upload one or more pasture images (JPG/PNG)",
-        type=["jpg", "jpeg", "png"],
-        accept_multiple_files=True,
-        key="predict_uploader",
-    )
-    # Persist in state
-    state["uploaded_files"] = uploaded_files
+    [Col 1]  1. Upload images & Run
+    [Col 2]  2. Model configuration & model info
+    """
+    col_upload, col_model = st.columns([1, 1])
 
-    st.markdown("---")
-    st.subheader("2. Model configuration")
+    # We define model config first so we can use model_id/aux_heads when user clicks "Run"
+    with col_model:
+        st.subheader("2. Model configuration")
 
-    # Model selector
-    model_labels = [MODEL_METADATA[m]["display_name"] for m in MODEL_ORDER]
-    model_id = st.selectbox(
-        "Choose model",
-        options=MODEL_ORDER,
-        format_func=lambda m: MODEL_METADATA[m]["display_name"],
-        key="predict_model_select",
-    )
+        model_id = st.selectbox(
+            "Choose model",
+            options=MODEL_ORDER,
+            format_func=lambda m: MODEL_METADATA[m]["display_name"],
+            key="predict_model_select",
+        )
 
-    supports_aux = MODEL_METADATA[model_id].get("supports_aux", False)
-    aux_heads = st.checkbox(
-        "Use AUX heads (if available)",
-        value=supports_aux,  # default ON if supported
-        key="predict_aux_heads",
-        disabled=not supports_aux,
-        help=None if supports_aux else "AUX heads not available for this model.",
-    )
+        supports_aux = MODEL_METADATA[model_id].get("supports_aux", False)
+        aux_heads = st.checkbox(
+            "Use AUX heads",
+            value=supports_aux,  # default ON if supported
+            key="predict_aux_heads",
+            disabled=not supports_aux,
+            help=None if supports_aux else "AUX heads not available for this model.",
+        )
 
-    _render_model_description_card(model_id, aux_heads)
+        _render_model_description_card(model_id, aux_heads)
 
-    st.markdown("---")
-    st.subheader("3. Run prediction")
+    with col_upload:
+        st.subheader("1. Upload images & run")
 
-    show_advanced = st.checkbox(
-        "Show advanced details (raw JSON)",
-        value=state.get("show_advanced", False),
-        key="predict_show_advanced",
-    )
-    state["show_advanced"] = show_advanced
+        uploaded_files = st.file_uploader(
+            "Upload one or more pasture images (JPG/PNG)",
+            type=["jpg", "jpeg", "png"],
+            accept_multiple_files=True,
+            key="predict_uploader",
+        )
+        state["uploaded_files"] = uploaded_files
 
-    if st.button("Run prediction", type="primary", key="predict_run_button"):
-        _handle_run_prediction(state, model_id, aux_heads)
+        # Space between uploader and controls
+        st.markdown("&nbsp;", unsafe_allow_html=True)
+
+        state["show_advanced"] = False
+
+        if st.button("Run prediction", type="primary", key="predict_run_button"):
+            _handle_run_prediction(state, model_id, aux_heads)
 
 
 def _render_model_description_card(model_id: str, aux_heads: bool) -> None:
@@ -155,7 +161,6 @@ def _handle_run_prediction(
             )
         except Exception as exc:  # noqa: BLE001
             state["api_error"] = str(exc)
-            # st.toast is only available on recent Streamlit versions; fallback to st.error
             try:
                 st.toast(f"Prediction failed: {exc}", icon="❌")
             except Exception:  # noqa: BLE001
@@ -197,7 +202,6 @@ def _parse_prediction_response(response: Dict[str, Any]) -> Dict[str, Dict[str, 
     for item in raw_preds:
         filename = item.get("filename", "unknown")
         biomass = item.get("biomass", {})
-        # Ensure only known keys and keep ordering
         clean_biomass = {k: float(biomass.get(k, 0.0)) for k in BIOMASS_KEYS}
         preds[filename] = {"biomass": clean_biomass}
 
@@ -205,7 +209,7 @@ def _parse_prediction_response(response: Dict[str, Any]) -> Dict[str, Dict[str, 
 
 
 # -----------------------------------------------------------------------------
-# Right column: results
+# Results area (below controls)
 # -----------------------------------------------------------------------------
 def _render_predict_results(state: Dict[str, Any]) -> None:
     api_error = state.get("api_error")
@@ -218,8 +222,8 @@ def _render_predict_results(state: Dict[str, Any]) -> None:
 
     if not uploaded_files:
         st.info(
-            "No predictions yet. Upload one or more pasture images on the left "
-            "and click **Run prediction**."
+            "No predictions yet. Upload one or more pasture images above and "
+            "click **Run prediction**."
         )
         return
 
@@ -269,36 +273,50 @@ def _render_single_prediction_card(
     show_advanced: bool,
     raw_response: Dict[str, Any] | None,
     uploaded_files: List[Any],
+    show_image: bool = True,   # NEW PARAM
 ) -> None:
+    """
+    Single-image layout:
+
+    - (optional) Image
+    - Biomass table
+    - Two-column "subplot":
+        left  = bar chart
+        right = radar chart
+    """
     st.subheader(f"Prediction for **{filename}**")
 
     file_obj = _find_uploaded_file(uploaded_files, filename)
 
     with st.container():
-        col_img, col_info = st.columns([1, 1])
-
-        with col_img:
+        # Image at the top (if requested)
+        if show_image:
             if file_obj is not None:
-                st.image(file_obj,  use_container_width=True, caption=filename)
+                st.image(file_obj, use_column_width=True, caption=filename)
             else:
                 st.warning("Could not find the original image in uploaded files.")
 
-        with col_info:
-            st.markdown("**Biomass estimates**")
+        # Table just under the image
+        st.markdown("**Biomass estimates**")
+        df = pd.DataFrame(
+            {
+                "Biomass": [BIOMASS_DISPLAY[k] for k in BIOMASS_KEYS],
+                "Value": [biomass.get(k, 0.0) for k in BIOMASS_KEYS],
+                "CI": ["–" for _ in BIOMASS_KEYS],  # placeholder for future CIs
+            }
+        )
+        st.table(df)
 
-            df = pd.DataFrame(
-                {
-                    "Biomass": [BIOMASS_DISPLAY[k] for k in BIOMASS_KEYS],
-                    "Value": [biomass.get(k, 0.0) for k in BIOMASS_KEYS],
-                    "CI": ["–" for _ in BIOMASS_KEYS],  # placeholder for future CIs
-                }
-            )
-            st.table(df)
+        # 2-chart "subplot" row
+        st.markdown("**Visualizations**")
+        col_bar, col_radar = st.columns(2)
 
-            st.markdown("**Biomass composition (bar chart)**")
+        with col_bar:
+            st.markdown("Biomass composition")
             _render_biomass_bar_chart(biomass)
 
-            st.markdown("**Shape overview (radar chart)**")
+        with col_radar:
+            st.markdown("Shape overview")
             _render_biomass_radar_chart(biomass)
 
     if show_advanced and raw_response is not None:
@@ -314,21 +332,18 @@ def _render_biomass_bar_chart(biomass: Dict[str, float]) -> None:
             "Key": BIOMASS_KEYS,
         }
     )
-    data["Color"] = data["Key"].map(BIOMASS_COLORS)
 
     chart = (
         alt.Chart(data)
         .mark_bar()
         .encode(
-            y=alt.Y("Biomass:N", sort=None),
-            x=alt.X("Value:Q", title=f"Value ({BIOMASS_UNIT})"),
-            color=alt.Color("Biomass:N", scale=None),
+            x=alt.X("Biomass:N", sort=None, title="Biomass type"),
+            y=alt.Y("Value:Q", title=f"Value ({BIOMASS_UNIT})"),
+            color=alt.Color("Biomass:N", legend=None),
         )
-        .properties(height=200)
+        .properties(height=300)
     )
 
-    # altair doesn't support per-row color easily without transform;
-    # we let Streamlit pick colors based on category, but we kept mapping above
     st.altair_chart(chart, use_container_width=True)
 
 
@@ -367,7 +382,6 @@ def _compute_batch_summary(
     """
     Compute average biomasses + grazing score/suggestion.
     """
-    # Average biomass
     values = np.array(
         [
             [predictions[f]["biomass"][k] for k in BIOMASS_KEYS]
@@ -449,7 +463,7 @@ def _render_batch_summary_card(batch_summary: Dict[str, Any]) -> None:
         st.table(df)
 
     with col_bottom:
-        st.markdown("**Average composition (bar chart)**")
+        st.markdown("**Average composition **")
         _render_biomass_bar_chart(avg)
 
     st.markdown("---")
@@ -483,7 +497,7 @@ def _render_prediction_grid_multi(
             st.markdown(f"**{filename}**")
             file_obj = _find_uploaded_file(uploaded_files, filename)
             if file_obj is not None:
-                st.image(file_obj,  use_container_width=True)
+                st.image(file_obj, use_container_width=True)
 
             biomass = predictions[filename]["biomass"]
             df = pd.DataFrame(
@@ -494,11 +508,12 @@ def _render_prediction_grid_multi(
             )
             st.table(df)
 
-            with st.expander("View details"):
+            with st.expander("View full details"):
                 _render_single_prediction_card(
                     filename=filename,
                     biomass=biomass,
                     show_advanced=show_advanced,
                     raw_response=raw_response,
                     uploaded_files=uploaded_files,
+                    show_image=False
                 )
