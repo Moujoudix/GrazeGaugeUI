@@ -1,48 +1,71 @@
-import os
+# app.py
 import streamlit as st
 
-
-# Define the base URI of the API
-#   - Potential sources are in `.streamlit/secrets.toml` or in the Secrets section
-#     on Streamlit Cloud
-#   - The source selected is based on the shell variable passend when launching streamlit
-#     (shortcuts are included in Makefile). By default it takes the cloud API url
-if 'API_URI' in os.environ:
-    BASE_URI = st.secrets[os.environ.get('API_URI')]
-else:
-    BASE_URI = st.secrets['cloud_api_uri']
-# Add a '/' at the end if it's not there
-BASE_URI = BASE_URI if BASE_URI.endswith('/') else BASE_URI + '/'
-# Define the url to be used by requests.get to get a prediction (adapt if needed)
-url = BASE_URI + 'predict'
-
-# Just displaying the source for the API. Remove this in your final version.
-st.markdown(f"Working with {url}")
-
-st.markdown("Now, the rest is up to you. Start creating your page.")
+from config import APP_TITLE, APP_SUBTITLE
+from ui_predict import render_predict_page, init_predict_state
+from ui_educational import render_educational_lab_page, init_educational_state
+from ui_about import render_about_page
 
 
-# TODO: Add some titles, introduction, ...
+def setup_page() -> None:
+    st.set_page_config(
+        page_title=APP_TITLE,
+        layout="wide",
+        initial_sidebar_state="expanded",
+    )
 
 
-# TODO: Request user input
+def render_header() -> None:
+    st.title(APP_TITLE)
+    st.caption(APP_SUBTITLE)
+    st.markdown("---")
 
 
-# TODO: Call the API using the user's input
-#   - url is already defined above
-#   - create a params dict based on the user's input
-#   - finally call your API using the requests package
+def render_sidebar() -> str:
+    st.sidebar.title("Navigation")
+    page = st.sidebar.radio(
+        "Go to",
+        options=["Predict", "Educational Lab", "About & Credits"],
+        index=0,
+    )
+
+    st.sidebar.markdown("---")
+    st.sidebar.markdown(
+        """
+**GrazeGauge**\n
+Capstone project - computer vision for pasture biomass.
+"""
+    )
+
+    return page
 
 
-# TODO: retrieve the results
-#   - add a little check if you got an ok response (status code 200) or something else
-#   - retrieve the prediction from the JSON
+def init_session_state() -> None:
+    """Initialize all page-specific state containers."""
+    init_predict_state()
+    init_educational_state()
+    # About page currently doesn't need its own state
 
 
-# TODO: display the prediction in some fancy way to the user
+def main() -> None:
+    setup_page()
+    init_session_state()
+
+    page = render_sidebar()
+
+    if page == "Predict":
+        render_header()
+        render_predict_page()
+    elif page == "Educational Lab":
+        render_header()
+        render_educational_lab_page()
+    elif page == "About & Credits":
+        render_header()
+        render_about_page()
+    else:
+        render_header()
+        st.error("Unknown page selected.")
 
 
-# TODO: [OPTIONAL] maybe you can add some other pages?
-#   - some statistical data you collected in graphs
-#   - description of your product
-#   - a 'Who are we?'-page
+if __name__ == "__main__":
+    main()
