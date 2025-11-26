@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from typing import Dict, Any
+from typing import Any, Dict, Optional, Tuple, List
 
 import numpy as np
 import pandas as pd
 import matplotlib.cm as cm
 import streamlit as st
 import altair as alt
+from PIL import Image
 
 from config import (
     BIOMASS_KEYS,
@@ -14,43 +15,39 @@ from config import (
     BIOMASS_COLORS,
     MODEL_METADATA,
     MODEL_ORDER,
-    FOCUS_OPTIONS,      # now we treat as list of biomass keys we care about
+    FOCUS_OPTIONS,      # list of biomass keys to focus on, e.g. ["Dry_Green_g", ...]
     FOCUS_TO_LABEL,
 )
 from api_client import call_compare_api
 
 
-
+# -----------------------------------------------------------------------------
+# State
+# -----------------------------------------------------------------------------
 def init_educational_state() -> None:
+    """
+    State for the Educational Lab page.
+
+    - model_1_id / model_2_id: selected model names
+    - example_image: UploadedFile from Streamlit
+    - comparison_result: raw JSON from /compare
+    - focus: current biomass key focus (one of FOCUS_OPTIONS)
+    - api_error: last API error (if any)
+    """
     if "edu_state" not in st.session_state:
         st.session_state["edu_state"] = {
             "model_1_id": None,
             "model_2_id": None,
-            "example_image": None,  # UploadedFile
-            "comparison_result": None,  # raw JSON from /compare
-            "focus": FOCUS_OPTIONS[0],  # default first key
+            "example_image": None,       # UploadedFile
+            "comparison_result": None,   # raw JSON from /compare
+            "focus": FOCUS_OPTIONS[0],   # default first key
             "api_error": None,
         }
 
 
-
-def init_educational_state() -> None:
-    if "edu_state" not in st.session_state:
-        st.session_state["edu_state"] = {
-            "model_1_id": None,
-            "model_2_id": None,
-            "model_1_aux": False,
-            "model_2_aux": False,
-            "example_index": None,
-            "gt_biomass": None,
-            "pred_model1": None,
-            "pred_model2": None,
-            "error_model1": None,
-            "error_model2": None,
-            "focus": "Green",
-        }
-
-
+# -----------------------------------------------------------------------------
+# Page entrypoint
+# -----------------------------------------------------------------------------
 def render_educational_lab_page() -> None:
     init_educational_state()
     state = st.session_state["edu_state"]
@@ -58,7 +55,6 @@ def render_educational_lab_page() -> None:
     _render_educational_controls(state)
     st.markdown("---")
     _render_comparison_result(state)
-
 
 
 # -----------------------------------------------------------------------------
@@ -69,6 +65,7 @@ def _render_educational_controls(state: Dict[str, Any]) -> None:
 
     col_models, col_image = st.columns([1, 1])
 
+    # Model selection
     with col_models:
         st.markdown("**1. Choose two models**")
 
@@ -93,6 +90,7 @@ def _render_educational_controls(state: Dict[str, Any]) -> None:
         state["model_1_id"] = model_1_id
         state["model_2_id"] = model_2_id
 
+    # Image upload
     with col_image:
         st.markdown("**2. Upload an image to compare on**")
         uploaded = st.file_uploader(
@@ -107,7 +105,6 @@ def _render_educational_controls(state: Dict[str, Any]) -> None:
     st.markdown("**3. Run comparison**")
     if st.button("Compare on this image", type="primary", key="edu_compare_button"):
         _handle_compare(state)
-
 
 
 def _handle_compare(state: Dict[str, Any]) -> None:
@@ -147,9 +144,8 @@ def _handle_compare(state: Dict[str, Any]) -> None:
         st.success("Comparison ready!")
 
 
-
 # -----------------------------------------------------------------------------
-# Comparison result
+# Comparison result (predictions + summary)
 # -----------------------------------------------------------------------------
 def _render_comparison_result(state: Dict[str, Any]) -> None:
     if state.get("api_error"):
@@ -187,11 +183,10 @@ def _render_comparison_result(state: Dict[str, Any]) -> None:
         model_2_name=model_2_name,
     )
 
-    _render_error_summary_simple(m1["biomass"], m2["biomass"], model_1_name, model_2_name)
+    _render_summary_simple(m1["biomass"], m2["biomass"], model_1_name, model_2_name)
 
     st.markdown("---")
     _render_explainability_section(state, m1, m2, model_1_name, model_2_name)
-
 
 
 def _render_comparison_bar_chart(
@@ -236,8 +231,7 @@ def _render_comparison_bar_chart(
     st.altair_chart(chart, use_container_width=True)
 
 
-
-def _render_error_summary_simple(
+def _render_summary_simple(
     pred_model1: Dict[str, float],
     pred_model2: Dict[str, float],
     model_1_name: str,
@@ -256,9 +250,8 @@ def _render_error_summary_simple(
     )
 
 
-
 # -----------------------------------------------------------------------------
-# Explainability
+# Explainability (Grad-CAM overlays)
 # -----------------------------------------------------------------------------
 def _render_explainability_section(
     state: Dict[str, Any],
@@ -269,6 +262,7 @@ def _render_explainability_section(
 ) -> None:
     st.subheader("Explainability (Grad-CAM)")
 
+    # Choose biomass focus
     focus = st.radio(
         "Choose biomass focus",
         options=FOCUS_OPTIONS,
@@ -284,60 +278,163 @@ def _render_explainability_section(
     heatmaps1 = expl1.get("heatmaps", {})
     heatmaps2 = expl2.get("heatmaps", {})
 
+    # Per-model normalisation: global vmin/vmax across the three focus targets
+    vmin1, vmax1 = _compute_global_range(
+        [heatmaps1.get(k) for k in FOCUS_OPTIONS if heatmaps1.get(k) is not None]
+    )
+    vmin2, vmax2 = _compute_global_range(
+        [heatmaps2.get(k) for k in FOCUS_OPTIONS if heatmaps2.get(k) is not None]
+    )
+
     hm1 = heatmaps1.get(focus)
     hm2 = heatmaps2.get(focus)
+
+    uploaded = state.get("example_image")
+    base_image: Optional[Image.Image] = None
+    if uploaded is not None:
+        # Convert UploadedFile to PIL Image
+        base_image = Image.open(uploaded).convert("RGB")
 
     col1, col2 = st.columns(2)
 
     with col1:
         st.markdown(f"**Model 1: {model_1_name}**")
         if hm1 is not None:
-            _show_heatmap_values(hm1)
+            if base_image is not None:
+                _show_overlay(base_image, hm1, vmin=vmin1, vmax=vmax1)
+            else:
+                _show_heatmap_values(hm1, vmin=vmin1, vmax=vmax1)
         else:
-            st.warning(f"No heatmap for {focus}.")
+            st.warning(f"No heatmap for {FOCUS_TO_LABEL.get(focus, focus)}.")
 
     with col2:
         st.markdown(f"**Model 2: {model_2_name}**")
         if hm2 is not None:
-            _show_heatmap_values(hm2)
+            if base_image is not None:
+                _show_overlay(base_image, hm2, vmin=vmin2, vmax=vmax2)
+            else:
+                _show_heatmap_values(hm2, vmin=vmin2, vmax=vmax2)
         else:
-            st.warning(f"No heatmap for {focus}.")
+            st.warning(f"No heatmap for {FOCUS_TO_LABEL.get(focus, focus)}.")
 
     st.caption(
         "These Grad-CAM heatmaps highlight where each model focused when predicting "
-        "the selected biomass component. Darker/hotter regions indicate higher importance."
+        "the selected biomass component. Hotter regions indicate higher importance. "
+        "Colors are normalised per model across the three focus targets."
     )
 
 
-def _show_heatmap_values(hm: Dict[str, Any], cmap_name: str = "jet") -> None:
+# -----------------------------------------------------------------------------
+# Heatmap utilities
+# -----------------------------------------------------------------------------
+def _compute_global_range(hms: List[Dict[str, Any]]) -> Tuple[float, float]:
     """
-    Show Grad-CAM / saliency heatmap as a colored image.
-    `values` is expected to be a 2D list of floats in [0,1].
+    Compute global min/max across a list of heatmaps (each with 'values').
+    Used for per-model normalisation across multiple targets.
+    """
+    all_vals = []
+    for hm in hms:
+        if hm is None:
+            continue
+        vals = hm.get("values")
+        if vals is None:
+            continue
+        arr = np.array(vals, dtype=float)
+        arr = np.nan_to_num(arr)
+        all_vals.append(arr.ravel())
+
+    if not all_vals:
+        return 0.0, 1.0
+
+    stacked = np.concatenate(all_vals)
+    return float(stacked.min()), float(stacked.max())
+
+
+def _heatmap_to_rgb(
+    values: Any,
+    vmin: float,
+    vmax: float,
+    cmap_name: str = "jet",
+) -> np.ndarray:
+    """
+    Convert a 2D heatmap + shared vmin/vmax into RGB uint8.
+    """
+    arr = np.array(values, dtype=float)  # [H, W]
+    arr = np.nan_to_num(arr)
+
+    if vmax <= vmin:
+        norm = np.zeros_like(arr)
+    else:
+        norm = (arr - vmin) / (vmax - vmin)
+        norm = np.clip(norm, 0.0, 1.0)
+
+    cmap = cm.get_cmap(cmap_name)
+    rgb = cmap(norm)[..., :3]  # [H, W, 3] floats in [0,1]
+    rgb_u8 = (rgb * 255).astype(np.uint8)
+    return rgb_u8
+
+
+def _show_heatmap_values(
+    hm: Dict[str, Any],
+    vmin: Optional[float] = None,
+    vmax: Optional[float] = None,
+    cmap_name: str = "jet",
+) -> None:
+    """
+    Fallback: show heatmap alone (no overlay).
     """
     values = hm.get("values")
     if values is None:
         st.warning("Heatmap has no 'values' field.")
         return
 
-    arr = np.array(values, dtype=float)   # [H, W]
+    arr = np.array(values, dtype=float)
+    arr = np.nan_to_num(arr)
 
-    if arr.size == 0:
-        st.warning("Empty heatmap.")
+    if vmin is None or vmax is None:
+        vmin = float(arr.min())
+        vmax = float(arr.max())
+
+    rgb_u8 = _heatmap_to_rgb(arr, vmin=vmin, vmax=vmax, cmap_name=cmap_name)
+    st.image(rgb_u8, use_column_width=True)
+
+
+def _show_overlay(
+    base_image: Image.Image,
+    hm: Dict[str, Any],
+    vmin: Optional[float] = None,
+    vmax: Optional[float] = None,
+    alpha: float = 0.35,
+    cmap_name: str = "jet",
+) -> None:
+    """
+    Overlay a heatmap onto the original image using the given vmin/vmax.
+    """
+    values = hm.get("values")
+    if values is None:
+        st.warning("Heatmap has no 'values' field.")
         return
 
-    # Robust normalisation to [0, 1]
+    arr = np.array(values, dtype=float)
     arr = np.nan_to_num(arr)
-    vmin, vmax = float(arr.min()), float(arr.max())
-    if vmax > vmin:
-        arr = (arr - vmin) / (vmax - vmin)
-    else:
-        arr = np.zeros_like(arr)
 
-    # Apply colormap -> RGB in [0,1]
-    cmap = cm.get_cmap(cmap_name)         # "jet", "viridis", "plasma", ...
-    colored = cmap(arr)[..., :3]          # [H, W, 3], drop alpha channel
+    if vmin is None or vmax is None:
+        vmin = float(arr.min())
+        vmax = float(arr.max())
 
-    # Convert to uint8 for st.image
-    colored_u8 = (colored * 255).astype(np.uint8)
+    # Heatmap RGB
+    rgb_hm = _heatmap_to_rgb(arr, vmin=vmin, vmax=vmax, cmap_name=cmap_name)
+    H, W, _ = rgb_hm.shape
 
-    st.image(colored_u8, use_column_width=True)
+    # Resize original image to match heatmap resolution
+    base_resized = base_image.resize((W, H))
+    base_np = np.array(base_resized, dtype=np.float32) / 255.0
+    if base_np.ndim == 2:  # grayscale
+        base_np = np.stack([base_np] * 3, axis=-1)
+
+    hm_np = rgb_hm.astype(np.float32) / 255.0
+
+    overlay = (1.0 - alpha) * base_np + alpha * hm_np
+    overlay_u8 = (overlay * 255).astype(np.uint8)
+
+    st.image(overlay_u8, use_column_width=True)
