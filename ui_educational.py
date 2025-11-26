@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional, Tuple, List
 
+import os
+
 import numpy as np
 import pandas as pd
 import matplotlib.cm as cm
@@ -20,6 +22,38 @@ from config import (
 )
 from api_client import call_compare_api
 
+
+
+@st.cache_data
+def load_ground_truth_table() -> pd.DataFrame:
+    """
+    Load the wide CSV with ground truth biomass values.
+
+    Expected columns:
+      - 'image_id' (matching uploaded filename without extension)
+      - one column per BIOMASS_KEYS
+    """
+    df = pd.read_csv("data/wide.csv")
+    return df
+
+
+def get_ground_truth_row_for_filename(filename: str) -> Optional[pd.Series]:
+    """
+    Given an uploaded filename like 'ID1001187975.jpg',
+    return the matching row from the GT table as a pandas Series.
+    """
+    df = load_ground_truth_table()
+
+    if "image_id" not in df.columns:
+        return None
+
+    mask = df["image_id"].astype(str) == str(filename)
+    matches = df.loc[mask]
+
+    if matches.empty:
+        return None
+
+    return matches.iloc[0]
 
 # -----------------------------------------------------------------------------
 # State
@@ -174,6 +208,12 @@ def _render_comparison_result(state: Dict[str, Any]) -> None:
         "display_name", m2["model_name"]
     )
 
+    # NEW: ground-truth lookup based on uploaded filename
+    uploaded = state.get("example_image")
+    gt_row = None
+    if uploaded is not None:
+        gt_row = get_ground_truth_row_for_filename(uploaded.name)
+
     st.subheader("Biomass predictions comparison")
 
     _render_comparison_bar_chart(
@@ -181,9 +221,8 @@ def _render_comparison_result(state: Dict[str, Any]) -> None:
         pred_model2=m2["biomass"],
         model_1_name=model_1_name,
         model_2_name=model_2_name,
-        gt_biomass=None,  # or real GT dict when you have it
+        gt_row=gt_row,  # <-- pass GT row (Series) or None
     )
-
 
     _render_summary_simple(m1["biomass"], m2["biomass"], model_1_name, model_2_name)
 
@@ -191,66 +230,109 @@ def _render_comparison_result(state: Dict[str, Any]) -> None:
     _render_explainability_section(state, m1, m2, model_1_name, model_2_name)
 
 
+
 def _render_comparison_bar_chart(
     pred_model1: Dict[str, float],
     pred_model2: Dict[str, float],
     model_1_name: str,
     model_2_name: str,
-    gt_biomass: Optional[Dict[str, float]] = None,
+    gt_row: Optional[pd.Series] = None,
 ) -> None:
     """
     Grouped bar chart: one group per biomass type, 2 or 3 bars per group:
-    - Ground truth (if available)
-    - Model 1
-    - Model 2
+      - Ground truth (if gt_row is not None)
+      - Model 1
+      - Model 2
+
+    Colors:
+      - Ground truth: green
+      - Model 1: dark blue
+      - Model 2: light blue
+
+    Shows value labels on top of each bar.
     """
-    rows = []
+    df_parts: List[pd.DataFrame] = []
 
-    # Optional ground truth as a third bar
-    if gt_biomass is not None:
-        for key in BIOMASS_KEYS:
-            rows.append(
-                {
-                    "Biomass": BIOMASS_DISPLAY[key],
-                    "Source": "Ground truth",
-                    "Value": float(gt_biomass.get(key, 0.0)),
-                }
-            )
+    sources_order: List[str] = []
+    colors: List[str] = []
 
-    # Model 1
-    for key in BIOMASS_KEYS:
-        rows.append(
+    # Ground truth part (from wide.csv row)
+    if gt_row is not None:
+        df_gt = pd.DataFrame(
             {
-                "Biomass": BIOMASS_DISPLAY[key],
-                "Source": model_1_name,
-                "Value": float(pred_model1.get(key, 0.0)),
+                "Biomass": [BIOMASS_DISPLAY[k] for k in BIOMASS_KEYS],
+                "Source": ["Ground truth"] * len(BIOMASS_KEYS),
+                "Value": [float(gt_row[k]) for k in BIOMASS_KEYS],
             }
         )
+        df_parts.append(df_gt)
+        sources_order.append("Ground truth")
+        colors.append("#4CAF50")  # green
 
-    # Model 2
-    for key in BIOMASS_KEYS:
-        rows.append(
-            {
-                "Biomass": BIOMASS_DISPLAY[key],
-                "Source": model_2_name,
-                "Value": float(pred_model2.get(key, 0.0)),
-            }
-        )
+    # Model 1 part
+    df_m1 = pd.DataFrame(
+        {
+            "Biomass": [BIOMASS_DISPLAY[k] for k in BIOMASS_KEYS],
+            "Source": [model_1_name] * len(BIOMASS_KEYS),
+            "Value": [float(pred_model1.get(k, 0.0)) for k in BIOMASS_KEYS],
+        }
+    )
+    df_parts.append(df_m1)
+    sources_order.append(model_1_name)
+    colors.append("#1565C0")  # dark blue
 
-    df = pd.DataFrame(rows)
+    # Model 2 part
+    df_m2 = pd.DataFrame(
+        {
+            "Biomass": [BIOMASS_DISPLAY[k] for k in BIOMASS_KEYS],
+            "Source": [model_2_name] * len(BIOMASS_KEYS),
+            "Value": [float(pred_model2.get(k, 0.0)) for k in BIOMASS_KEYS],
+        }
+    )
+    df_parts.append(df_m2)
+    sources_order.append(model_2_name)
+    colors.append("#90CAF9")  # light blue
 
-    # Grouped bars: x = Biomass, xOffset = Source
-    chart = (
+    df = pd.concat(df_parts, ignore_index=True)
+
+    base_encodings = dict(
+        x=alt.X("Biomass:N", title="Biomass type"),
+        xOffset="Source:N",
+        y=alt.Y("Value:Q", title="Value (g)"),
+    )
+
+    # Bars
+    bars = (
         alt.Chart(df)
         .mark_bar()
         .encode(
-            x=alt.X("Biomass:N", title="Biomass type"),
-            xOffset="Source:N",
-            y=alt.Y("Value:Q", title="Value (g)"),
-            color=alt.Color("Source:N", title=""),
+            **base_encodings,
+            color=alt.Color(
+                "Source:N",
+                title="",
+                scale=alt.Scale(
+                    domain=sources_order,
+                    range=colors,
+                ),
+            ),
         )
-        .properties(height=350)
     )
+
+    # Value labels on top of bars
+    labels = (
+        alt.Chart(df)
+        .mark_text(
+            dy=-5,          # move text slightly above bar
+            size=11,
+        )
+        .encode(
+            **base_encodings,
+            text=alt.Text("Value:Q", format=".2f"),
+            color=alt.value("black"),
+        )
+    )
+
+    chart = (bars + labels).properties(height=350)
 
     st.altair_chart(chart, use_container_width=True)
 
