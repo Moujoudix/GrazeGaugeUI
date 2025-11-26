@@ -1,70 +1,129 @@
 # api_client.py
 from typing import List, Dict, Any
-import json
-
 import requests
 from streamlit.runtime.uploaded_file_manager import UploadedFile
 
-from config import PREDICT_API_URL, API_TIMEOUT_SECONDS
+from config import MODELS_URL, PREDICT_URL, COMPARE_URL, API_TIMEOUT_SECONDS
 
 
+# -----------------------------------------------------------------------------
+# 1. Fetch models metadata
+# -----------------------------------------------------------------------------
+def fetch_models() -> Dict[str, Dict[str, Any]]:
+    """
+    Call GET /models and return a dict keyed by model name.
+
+    Returns:
+        {
+          "effnetv2_s_baseline": { ... },
+          "convnext_tiny_aug": { ... },
+          ...
+        }
+    """
+    resp = requests.get(MODELS_URL, timeout=API_TIMEOUT_SECONDS)
+    resp.raise_for_status()
+    data = resp.json()
+
+    models_list = data.get("models", [])
+    models_dict: Dict[str, Dict[str, Any]] = {}
+
+    for m in models_list:
+        name = m["name"]
+        models_dict[name] = m
+
+    return models_dict
+
+
+# -----------------------------------------------------------------------------
+# 2. Predictions for Predict tab (POST /predict)
+# -----------------------------------------------------------------------------
 def call_predict_api(
     images: List[UploadedFile],
-    model_id: str,
-    aux_heads: bool,
+    model_name: str | None = None,
 ) -> Dict[str, Any]:
     """
-    Call the /predict endpoint with one or more images.
+    Call POST /predict with one or more images and an optional model_name.
 
-    Parameters
-    ----------
-    images : list of UploadedFile
-        Files returned by st.file_uploader.
-    model_id : str
-        Selected model identifier (must match backend).
-    aux_heads : bool
-        Whether to use AUX heads for the selected model.
+    images: list of Streamlit UploadedFile
+    model_name: optional model ID (from /models.name)
 
-    Returns
-    -------
-    dict
-        Parsed JSON response from the backend.
-
-    Raises
-    ------
-    requests.RequestException
-        If an HTTP error / timeout occurs.
-    ValueError
-        If response JSON is malformed.
+    Returns backend JSON, e.g.:
+    {
+      "predictions": [
+        {
+          "filename": "...",
+          "model_name": "...",
+          "biomass": { ... }
+        },
+        ...
+      ]
+    }
     """
-    # Build multipart form data for files
+    if not images:
+        raise ValueError("No images provided to call_predict_api")
+
     files = []
     for img in images:
-        # UploadedFile has .name and .getvalue()
         file_bytes = img.getvalue()
         mime_type = img.type or "image/jpeg"
-        files.append(
-            (
-                "files",
-                (img.name, file_bytes, mime_type),
-            )
-        )
+        files.append(("files", (img.name, file_bytes, mime_type)))
 
-    # Adapt this payload to match your backend spec
+    params = {}
+    if model_name:
+        params["model_name"] = model_name
+
+    resp = requests.post(
+        PREDICT_URL,
+        params=params,
+        files=files,
+        timeout=API_TIMEOUT_SECONDS,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+# -----------------------------------------------------------------------------
+# 3. Comparison + Grad-CAM for Educational Lab (POST /compare)
+# -----------------------------------------------------------------------------
+def call_compare_api(
+    image: UploadedFile,
+    model_1: str,
+    model_2: str,
+    method: str = "grad_cam",
+) -> Dict[str, Any]:
+    """
+    Call POST /compare with a single image and two model names.
+
+    Returns backend JSON, e.g.:
+
+    {
+      "models": [
+        {
+          "model_name": "effnetv2_s_baseline",
+          "biomass": {...},
+          "explanation": {...}
+        },
+        {...}
+      ]
+    }
+    """
+    file_bytes = image.getvalue()
+    mime_type = image.type or "image/jpeg"
+
+    files = [
+        ("file", (image.name, file_bytes, mime_type)),
+    ]
     data = {
-        "model_id": model_id,
-        "aux_heads": json.dumps(aux_heads),  # or "true"/"false" depending on backend
+        "model_1": model_1,
+        "model_2": model_2,
+        "method": method,
     }
 
-    response = requests.post(
-        PREDICT_API_URL,
+    resp = requests.post(
+        COMPARE_URL,
         data=data,
         files=files,
         timeout=API_TIMEOUT_SECONDS,
     )
-    response.raise_for_status()
-
-    try:
-        return response.json()
-    except Exception as exc:  # noqa: BLE001
-        raise ValueError(f"Failed to parse JSON from /predict: {exc}") from exc
+    resp.raise_for_status()
+    return resp.json()

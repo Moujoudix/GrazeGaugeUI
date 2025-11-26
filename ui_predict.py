@@ -115,29 +115,29 @@ def _render_predict_controls(state: Dict[str, Any]) -> None:
 def _render_model_description_card(model_id: str, aux_heads: bool) -> None:
     meta = MODEL_METADATA[model_id]
     with st.expander("Model info", expanded=True):
-        st.markdown(f"**Model:** {meta['display_name']}")
-        st.markdown(f"**History:** {meta['history']}")
-        st.markdown(f"**Architecture & training:** {meta['description']}")
-        st.markdown(f"**Parameters / setup:** {meta['params']}")
+        st.markdown(f"**Model:** {meta.get('display_name', model_id)}")
 
+        backbone = meta.get("backbone_name")
+        if backbone:
+            st.markdown(f"**Backbone:** `{backbone}`")
+
+        img_h = meta.get("img_height")
+        img_w = meta.get("img_width")
+        if img_h and img_w:
+            st.markdown(f"**Input size:** {img_h} × {img_w}")
+
+        desc = meta.get("description")
+        if desc:
+            st.markdown(f"**Description:** {desc}")
+
+        # AUX text is now purely educational (backend doesn't know about AUX)
         aux_text = (
-            "AUX heads are **enabled** for this run. The model uses additional "
-            "auxiliary prediction tasks to regularize training and improve "
-            "biomass estimation."
+            "AUX heads are **enabled** in this run (frontend concept). "
+            "In future versions, AUX variants of the models could be exposed separately."
             if aux_heads
-            else "AUX heads are **disabled** for this run. The model uses only "
-            "the main regression head."
+            else "AUX heads are **disabled** in this run."
         )
-        if meta.get("supports_aux", False):
-            st.markdown(aux_text)
-        else:
-            st.markdown(
-                "This model does not support AUX heads. Only the main "
-                "regression head is used."
-            )
-
-        st.markdown("---")
-        st.markdown(f"_{meta['did_you_know']}_")
+        st.markdown(aux_text)
 
 
 def _handle_run_prediction(
@@ -156,8 +156,7 @@ def _handle_run_prediction(
         try:
             response = call_predict_api(
                 images=uploaded_files,
-                model_id=model_id,
-                aux_heads=aux_heads,
+                model_name=model_id
             )
         except Exception as exc:  # noqa: BLE001
             state["api_error"] = str(exc)
@@ -463,7 +462,7 @@ def _render_batch_summary_card(batch_summary: Dict[str, Any]) -> None:
         st.table(df)
 
     with col_bottom:
-        st.markdown("**Average composition **")
+        st.markdown("**Average composition**")
         _render_biomass_bar_chart(avg)
 
     st.markdown("---")

@@ -1,10 +1,11 @@
 # app.py
 import streamlit as st
 
-from config import APP_TITLE, APP_SUBTITLE
+from config import APP_TITLE, APP_SUBTITLE, MODEL_METADATA, MODEL_ORDER
 from ui_predict import render_predict_page, init_predict_state
 from ui_educational import render_educational_lab_page, init_educational_state
 from ui_about import render_about_page
+from api_client import fetch_models
 
 
 def setup_page() -> None:
@@ -21,9 +22,6 @@ def render_header() -> None:
 
 
 def render_top_nav() -> str:
-    """
-    Top navigation bar, horizontally, above the page content.
-    """
     page = st.radio(
         "Navigation",
         options=["Predict", "Educational Lab", "About & Credits"],
@@ -34,22 +32,42 @@ def render_top_nav() -> str:
     return page
 
 
+def init_models() -> None:
+    """
+    Fetch /models once and populate MODEL_METADATA / MODEL_ORDER.
+    """
+    if "models_loaded" in st.session_state and st.session_state["models_loaded"]:
+        return
+
+    try:
+        models_dict = fetch_models()
+    except Exception as exc:  # noqa: BLE001
+        st.error(f"Failed to load models from API: {exc}")
+        return
+
+    MODEL_METADATA.clear()
+    MODEL_METADATA.update(models_dict)
+
+    MODEL_ORDER.clear()
+    MODEL_ORDER.extend(models_dict.keys())
+
+    st.session_state["models_loaded"] = True
+
+
 def init_session_state() -> None:
-    """Initialize all page-specific state containers."""
     init_predict_state()
     init_educational_state()
-    # About page currently doesn't need its own state
+    # About has no state
 
 
 def main() -> None:
     setup_page()
+    init_models()
     init_session_state()
 
-    # Header + top navigation
     render_header()
     page = render_top_nav()
 
-    # Page content
     if page == "Predict":
         render_predict_page()
     elif page == "Educational Lab":

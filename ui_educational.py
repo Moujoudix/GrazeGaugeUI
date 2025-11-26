@@ -1,10 +1,10 @@
-# ui_educational.py
 from __future__ import annotations
 
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 
 import numpy as np
 import pandas as pd
+import matplotlib.cm as cm
 import streamlit as st
 import altair as alt
 
@@ -14,14 +14,24 @@ from config import (
     BIOMASS_COLORS,
     MODEL_METADATA,
     MODEL_ORDER,
-    FOCUS_OPTIONS,
-    FOCUS_TO_BIOMASS_KEY,
-    load_validation_examples,
+    FOCUS_OPTIONS,      # now we treat as list of biomass keys we care about
+    FOCUS_TO_LABEL,
 )
+from api_client import call_compare_api
 
 
-# Validation examples are read-only and can be cached at module import
-VALIDATION_EXAMPLES = load_validation_examples()
+
+def init_educational_state() -> None:
+    if "edu_state" not in st.session_state:
+        st.session_state["edu_state"] = {
+            "model_1_id": None,
+            "model_2_id": None,
+            "example_image": None,  # UploadedFile
+            "comparison_result": None,  # raw JSON from /compare
+            "focus": FOCUS_OPTIONS[0],  # default first key
+            "api_error": None,
+        }
+
 
 
 def init_educational_state() -> None:
@@ -50,15 +60,18 @@ def render_educational_lab_page() -> None:
     _render_comparison_result(state)
 
 
+
 # -----------------------------------------------------------------------------
 # Controls
 # -----------------------------------------------------------------------------
 def _render_educational_controls(state: Dict[str, Any]) -> None:
-    st.subheader("Model comparison")
+    st.subheader("Model comparison on a single image")
 
-    col1, col2, col3 = st.columns([1, 1, 1])
+    col_models, col_image = st.columns([1, 1])
 
-    with col1:
+    with col_models:
+        st.markdown("**1. Choose two models**")
+
         model_1_id = st.selectbox(
             "Model 1",
             options=[None] + MODEL_ORDER,
@@ -68,7 +81,6 @@ def _render_educational_controls(state: Dict[str, Any]) -> None:
             key="edu_model_1",
         )
 
-    with col2:
         model_2_id = st.selectbox(
             "Model 2",
             options=[None] + MODEL_ORDER,
@@ -78,154 +90,111 @@ def _render_educational_controls(state: Dict[str, Any]) -> None:
             key="edu_model_2",
         )
 
-    with col3:
-        st.markdown("**AUX heads**")
-        model_1_aux = st.checkbox(
-            "Model 1 AUX",
-            value=True
-            if (model_1_id and MODEL_METADATA[model_1_id].get("supports_aux", False))
-            else False,
-            disabled=not (model_1_id and MODEL_METADATA[model_1_id].get("supports_aux", False)),
-            key="edu_model_1_aux",
+        state["model_1_id"] = model_1_id
+        state["model_2_id"] = model_2_id
+
+    with col_image:
+        st.markdown("**2. Upload an image to compare on**")
+        uploaded = st.file_uploader(
+            "Upload a single pasture image",
+            type=["jpg", "jpeg", "png"],
+            key="edu_image_uploader",
         )
-        model_2_aux = st.checkbox(
-            "Model 2 AUX",
-            value=True
-            if (model_2_id and MODEL_METADATA[model_2_id].get("supports_aux", False))
-            else False,
-            disabled=not (model_2_id and MODEL_METADATA[model_2_id].get("supports_aux", False)),
-            key="edu_model_2_aux",
-        )
+        state["example_image"] = uploaded
+        if uploaded:
+            st.image(uploaded, use_column_width=True)
 
-    state["model_1_id"] = model_1_id
-    state["model_2_id"] = model_2_id
-    state["model_1_aux"] = model_1_aux
-    state["model_2_aux"] = model_2_aux
-
-    st.markdown(
-        "_Select two models and click **Compare on random image** to see how "
-        "they perform on the same validation example._"
-    )
-
-    if st.button("Compare on random image", type="primary", key="edu_compare_button"):
-        _handle_compare_on_random(state)
+    st.markdown("**3. Run comparison**")
+    if st.button("Compare on this image", type="primary", key="edu_compare_button"):
+        _handle_compare(state)
 
 
-def _handle_compare_on_random(state: Dict[str, Any]) -> None:
+
+def _handle_compare(state: Dict[str, Any]) -> None:
     model_1_id = state["model_1_id"]
     model_2_id = state["model_2_id"]
+    img = state["example_image"]
 
     if model_1_id is None or model_2_id is None:
         st.warning("Please select both Model 1 and Model 2.")
         return
-
-    if not VALIDATION_EXAMPLES:
-        st.warning(
-            "No validation examples are configured yet. "
-            "Please add them in config.load_validation_examples()."
-        )
+    if img is None:
+        st.warning("Please upload an image to compare on.")
         return
 
-    # Pick random validation example
-    idx = np.random.randint(0, len(VALIDATION_EXAMPLES))
-    example = VALIDATION_EXAMPLES[idx]
+    state["api_error"] = None
 
-    gt_biomass = example["ground_truth"]
-    preds_for_example = example.get("predictions", {})
+    with st.spinner("Running comparison and Grad-CAM..."):
+        try:
+            result = call_compare_api(
+                image=img,
+                model_1=model_1_id,
+                model_2=model_2_id,
+                method="grad_cam",
+            )
+        except Exception as exc:  # noqa: BLE001
+            state["api_error"] = str(exc)
+            try:
+                st.toast(f"Comparison failed: {exc}", icon="❌")
+            except Exception:
+                st.error(f"Comparison failed: {exc}")
+            return
 
-    pred_model1 = preds_for_example.get(model_1_id)
-    pred_model2 = preds_for_example.get(model_2_id)
-
-    if pred_model1 is None or pred_model2 is None:
-        st.warning(
-            "This validation example does not have predictions for one or both "
-            "selected models. Try again or adjust your validation data."
-        )
-        return
-
-    error_model1 = {
-        k: abs(float(pred_model1.get(k, 0.0)) - float(gt_biomass.get(k, 0.0)))
-        for k in BIOMASS_KEYS
-    }
-    error_model2 = {
-        k: abs(float(pred_model2.get(k, 0.0)) - float(gt_biomass.get(k, 0.0)))
-        for k in BIOMASS_KEYS
-    }
-
-    # Update state
-    state.update(
-        {
-            "example_index": idx,
-            "gt_biomass": gt_biomass,
-            "pred_model1": pred_model1,
-            "pred_model2": pred_model2,
-            "error_model1": error_model1,
-            "error_model2": error_model2,
-            "focus": state.get("focus", "Green"),
-        }
-    )
-
+    state["comparison_result"] = result
     try:
         st.toast("Comparison ready!", icon="📊")
-    except Exception:  # noqa: BLE001
+    except Exception:
         st.success("Comparison ready!")
+
 
 
 # -----------------------------------------------------------------------------
 # Comparison result
 # -----------------------------------------------------------------------------
 def _render_comparison_result(state: Dict[str, Any]) -> None:
-    idx = state.get("example_index")
-    if idx is None or state.get("gt_biomass") is None:
+    if state.get("api_error"):
+        st.error(f"Last comparison error: {state['api_error']}")
+
+    result = state.get("comparison_result")
+    if not result:
         st.info(
-            "No comparison yet. Select two models above and click "
-            "**Compare on random image** to see an example."
+            "No comparison yet. Choose two models, upload an image, "
+            "and click **Compare on this image**."
         )
         return
 
-    if idx < 0 or idx >= len(VALIDATION_EXAMPLES):
-        st.warning("Selected validation example index is out of range.")
+    models_data = result.get("models", [])
+    if len(models_data) != 2:
+        st.warning("Comparison result did not return exactly two models.")
         return
 
-    example = VALIDATION_EXAMPLES[idx]
-    gt_biomass = state["gt_biomass"]
-    pred_model1 = state["pred_model1"]
-    pred_model2 = state["pred_model2"]
+    m1 = models_data[0]
+    m2 = models_data[1]
 
-    model_1_id = state["model_1_id"]
-    model_2_id = state["model_2_id"]
-
-    st.subheader(f"Validation example: {example.get('id', f'#{idx}')}")
-    st.caption(
-        "Example from the validation set. Ground-truth biomass values come "
-        "from real field measurements."
+    model_1_name = MODEL_METADATA.get(m1["model_name"], {}).get(
+        "display_name", m1["model_name"]
+    )
+    model_2_name = MODEL_METADATA.get(m2["model_name"], {}).get(
+        "display_name", m2["model_name"]
     )
 
-    # Image display
-    img_path = example.get("image_path")
-    if img_path:
-        st.image(img_path, use_container_width=True)
-    else:
-        st.warning("No image_path provided for this validation example.")
-
-    st.markdown("### Biomass predictions vs ground truth")
+    st.subheader("Biomass predictions comparison")
 
     _render_comparison_bar_chart(
-        gt_biomass=gt_biomass,
-        pred_model1=pred_model1,
-        pred_model2=pred_model2,
-        model_1_name=MODEL_METADATA[model_1_id]["display_name"],
-        model_2_name=MODEL_METADATA[model_2_id]["display_name"],
+        pred_model1=m1["biomass"],
+        pred_model2=m2["biomass"],
+        model_1_name=model_1_name,
+        model_2_name=model_2_name,
     )
 
-    _render_error_summary(state)
+    _render_error_summary_simple(m1["biomass"], m2["biomass"], model_1_name, model_2_name)
 
     st.markdown("---")
-    _render_explainability_section(state, example)
+    _render_explainability_section(state, m1, m2, model_1_name, model_2_name)
+
 
 
 def _render_comparison_bar_chart(
-    gt_biomass: Dict[str, float],
     pred_model1: Dict[str, float],
     pred_model2: Dict[str, float],
     model_1_name: str,
@@ -234,13 +203,6 @@ def _render_comparison_bar_chart(
     rows = []
     for key in BIOMASS_KEYS:
         display_name = BIOMASS_DISPLAY[key]
-        rows.append(
-            {
-                "Biomass": display_name,
-                "Source": "Ground truth",
-                "Value": float(gt_biomass.get(key, 0.0)),
-            }
-        )
         rows.append(
             {
                 "Biomass": display_name,
@@ -274,88 +236,108 @@ def _render_comparison_bar_chart(
     st.altair_chart(chart, use_container_width=True)
 
 
-def _render_error_summary(state: Dict[str, Any]) -> None:
-    error_model1 = state["error_model1"]
-    error_model2 = state["error_model2"]
-    model_1_id = state["model_1_id"]
-    model_2_id = state["model_2_id"]
 
-    model_1_name = MODEL_METADATA[model_1_id]["display_name"]
-    model_2_name = MODEL_METADATA[model_2_id]["display_name"]
+def _render_error_summary_simple(
+    pred_model1: Dict[str, float],
+    pred_model2: Dict[str, float],
+    model_1_name: str,
+    model_2_name: str,
+) -> None:
+    st.markdown("### Summary (no ground truth available)")
+    vals1 = np.array([pred_model1.get(k, 0.0) for k in BIOMASS_KEYS], dtype=float)
+    vals2 = np.array([pred_model2.get(k, 0.0) for k in BIOMASS_KEYS], dtype=float)
 
-    mae1 = float(np.mean(list(error_model1.values())))
-    mae2 = float(np.mean(list(error_model2.values())))
+    mean1 = float(vals1.mean())
+    mean2 = float(vals2.mean())
 
-    st.markdown("### Error summary")
     st.markdown(
-        f"- Average absolute error for **{model_1_name}**: `{mae1:.3f}` g\n"
-        f"- Average absolute error for **{model_2_name}**: `{mae2:.3f}` g"
+        f"- Mean predicted biomass for **{model_1_name}**: `{mean1:.3f}` g\n"
+        f"- Mean predicted biomass for **{model_2_name}**: `{mean2:.3f}` g"
     )
 
-    # Optionally highlight which is better on this example
-    if mae1 < mae2:
-        better = model_1_name
-    elif mae2 < mae1:
-        better = model_2_name
-    else:
-        better = None
-
-    if better:
-        st.info(
-            f"On this example, **{better}** is closer to ground truth on average."
-        )
 
 
 # -----------------------------------------------------------------------------
 # Explainability
 # -----------------------------------------------------------------------------
-def _render_explainability_section(state: Dict[str, Any], example: Dict[str, Any]) -> None:
-    st.subheader("Explainability: where do models look?")
+def _render_explainability_section(
+    state: Dict[str, Any],
+    m1: Dict[str, Any],
+    m2: Dict[str, Any],
+    model_1_name: str,
+    model_2_name: str,
+) -> None:
+    st.subheader("Explainability (Grad-CAM)")
 
-    col_focus, _ = st.columns([1, 1])
-    with col_focus:
-        focus = st.radio(
-            "Explainability focus",
-            options=FOCUS_OPTIONS,
-            key="edu_focus_radio",
-            horizontal=True,
-        )
+    focus = st.radio(
+        "Choose biomass focus",
+        options=FOCUS_OPTIONS,
+        format_func=lambda k: FOCUS_TO_LABEL.get(k, k),
+        key="edu_focus_radio",
+        horizontal=True,
+    )
     state["focus"] = focus
 
-    model_1_id = state["model_1_id"]
-    model_2_id = state["model_2_id"]
-    model_1_name = MODEL_METADATA[model_1_id]["display_name"]
-    model_2_name = MODEL_METADATA[model_2_id]["display_name"]
+    expl1 = m1.get("explanation", {})
+    expl2 = m2.get("explanation", {})
 
-    expl = example.get("explainability", {})
-    maps_model1 = expl.get(model_1_id, {})
-    maps_model2 = expl.get(model_2_id, {})
+    heatmaps1 = expl1.get("heatmaps", {})
+    heatmaps2 = expl2.get("heatmaps", {})
 
-    map1_path = maps_model1.get(focus)
-    map2_path = maps_model2.get(focus)
+    hm1 = heatmaps1.get(focus)
+    hm2 = heatmaps2.get(focus)
 
     col1, col2 = st.columns(2)
 
     with col1:
         st.markdown(f"**Model 1: {model_1_name}**")
-        if map1_path:
-            st.image(map1_path, use_container_width=True)
+        if hm1 is not None:
+            _show_heatmap_values(hm1)
         else:
-            st.warning(
-                f"No explainability map found for {model_1_name} ({focus})."
-            )
+            st.warning(f"No heatmap for {focus}.")
 
     with col2:
         st.markdown(f"**Model 2: {model_2_name}**")
-        if map2_path:
-            st.image(map2_path, use_container_width=True)
+        if hm2 is not None:
+            _show_heatmap_values(hm2)
         else:
-            st.warning(
-                f"No explainability map found for {model_2_name} ({focus})."
-            )
+            st.warning(f"No heatmap for {focus}.")
 
     st.caption(
-        "The colored regions highlight areas of the image that contributed most "
-        "to the selected biomass prediction. These are Grad-CAM style "
-        "visualizations and are meant for educational purposes."
+        "These Grad-CAM heatmaps highlight where each model focused when predicting "
+        "the selected biomass component. Darker/hotter regions indicate higher importance."
     )
+
+
+def _show_heatmap_values(hm: Dict[str, Any], cmap_name: str = "jet") -> None:
+    """
+    Show Grad-CAM / saliency heatmap as a colored image.
+    `values` is expected to be a 2D list of floats in [0,1].
+    """
+    values = hm.get("values")
+    if values is None:
+        st.warning("Heatmap has no 'values' field.")
+        return
+
+    arr = np.array(values, dtype=float)   # [H, W]
+
+    if arr.size == 0:
+        st.warning("Empty heatmap.")
+        return
+
+    # Robust normalisation to [0, 1]
+    arr = np.nan_to_num(arr)
+    vmin, vmax = float(arr.min()), float(arr.max())
+    if vmax > vmin:
+        arr = (arr - vmin) / (vmax - vmin)
+    else:
+        arr = np.zeros_like(arr)
+
+    # Apply colormap -> RGB in [0,1]
+    cmap = cm.get_cmap(cmap_name)         # "jet", "viridis", "plasma", ...
+    colored = cmap(arr)[..., :3]          # [H, W, 3], drop alpha channel
+
+    # Convert to uint8 for st.image
+    colored_u8 = (colored * 255).astype(np.uint8)
+
+    st.image(colored_u8, use_column_width=True)
