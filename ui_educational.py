@@ -181,7 +181,9 @@ def _render_comparison_result(state: Dict[str, Any]) -> None:
         pred_model2=m2["biomass"],
         model_1_name=model_1_name,
         model_2_name=model_2_name,
+        gt_biomass=None,  # or real GT dict when you have it
     )
+
 
     _render_summary_simple(m1["biomass"], m2["biomass"], model_1_name, model_2_name)
 
@@ -194,20 +196,42 @@ def _render_comparison_bar_chart(
     pred_model2: Dict[str, float],
     model_1_name: str,
     model_2_name: str,
+    gt_biomass: Optional[Dict[str, float]] = None,
 ) -> None:
+    """
+    Grouped bar chart: one group per biomass type, 2 or 3 bars per group:
+    - Ground truth (if available)
+    - Model 1
+    - Model 2
+    """
     rows = []
+
+    # Optional ground truth as a third bar
+    if gt_biomass is not None:
+        for key in BIOMASS_KEYS:
+            rows.append(
+                {
+                    "Biomass": BIOMASS_DISPLAY[key],
+                    "Source": "Ground truth",
+                    "Value": float(gt_biomass.get(key, 0.0)),
+                }
+            )
+
+    # Model 1
     for key in BIOMASS_KEYS:
-        display_name = BIOMASS_DISPLAY[key]
         rows.append(
             {
-                "Biomass": display_name,
+                "Biomass": BIOMASS_DISPLAY[key],
                 "Source": model_1_name,
                 "Value": float(pred_model1.get(key, 0.0)),
             }
         )
+
+    # Model 2
+    for key in BIOMASS_KEYS:
         rows.append(
             {
-                "Biomass": display_name,
+                "Biomass": BIOMASS_DISPLAY[key],
                 "Source": model_2_name,
                 "Value": float(pred_model2.get(key, 0.0)),
             }
@@ -215,20 +239,21 @@ def _render_comparison_bar_chart(
 
     df = pd.DataFrame(rows)
 
+    # Grouped bars: x = Biomass, xOffset = Source
     chart = (
         alt.Chart(df)
         .mark_bar()
         .encode(
             x=alt.X("Biomass:N", title="Biomass type"),
+            xOffset="Source:N",
             y=alt.Y("Value:Q", title="Value (g)"),
-            color=alt.Color("Source:N"),
-            column=alt.Column("Biomass:N", title=None),
+            color=alt.Color("Source:N", title=""),
         )
-        .resolve_scale(y="independent")
-        .properties(height=200)
+        .properties(height=350)
     )
 
     st.altair_chart(chart, use_container_width=True)
+
 
 
 def _render_summary_simple(
