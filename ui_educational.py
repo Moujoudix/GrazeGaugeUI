@@ -1,27 +1,29 @@
 from __future__ import annotations
-
 from typing import Any, Dict, Optional, Tuple, List
-
 import os
-
 import numpy as np
 import pandas as pd
 import matplotlib.cm as cm
 import streamlit as st
 import altair as alt
 from PIL import Image
-
+from api_client import call_compare_api
 from config import (
     BIOMASS_KEYS,
     BIOMASS_DISPLAY,
     BIOMASS_COLORS,
     MODEL_METADATA,
     MODEL_ORDER,
-    FOCUS_OPTIONS,      # list of biomass keys to focus on, e.g. ["Dry_Green_g", ...]
+    FOCUS_OPTIONS,
     FOCUS_TO_LABEL,
+    CORE_BIOMASS_KEYS,
 )
-from api_client import call_compare_api
 
+
+# Relative thresholds (tune as you want)
+CLOSE_REL = 0.05   # both models considered "close" if <= 10% relative error
+FAR_REL   = 0.2   # considered "far" if >= 50% relative error
+DIFF_REL  = 0.10   # difference in relative error considered "large" if >= 10 points
 
 
 @st.cache_data
@@ -134,7 +136,7 @@ def _render_educational_controls(state: Dict[str, Any]) -> None:
         )
         state["example_image"] = uploaded
         if uploaded:
-            st.image(uploaded, use_column_width=True)
+            st.image(uploaded, use_container_width=True)
 
     st.markdown("**3. Run comparison**")
     if st.button("Compare on this image", type="primary", key="edu_compare_button"):
@@ -224,7 +226,13 @@ def _render_comparison_result(state: Dict[str, Any]) -> None:
         gt_row=gt_row,  # <-- pass GT row (Series) or None
     )
 
-    _render_summary_simple(m1["biomass"], m2["biomass"], model_1_name, model_2_name)
+    _render_summary_with_optional_gt(
+    pred_model1=m1["biomass"],
+    pred_model2=m2["biomass"],
+    model_1_name=model_1_name,
+    model_2_name=model_2_name,
+    gt_row=gt_row,
+    )
 
     st.markdown("---")
     _render_explainability_section(state, m1, m2, model_1_name, model_2_name)
@@ -337,24 +345,142 @@ def _render_comparison_bar_chart(
     st.altair_chart(chart, use_container_width=True)
 
 
-
-def _render_summary_simple(
+def _render_summary_with_optional_gt(
     pred_model1: Dict[str, float],
     pred_model2: Dict[str, float],
     model_1_name: str,
     model_2_name: str,
+    gt_row: Optional[pd.Series] = None,
 ) -> None:
-    st.markdown("### Summary (no ground truth available)")
-    vals1 = np.array([pred_model1.get(k, 0.0) for k in BIOMASS_KEYS], dtype=float)
-    vals2 = np.array([pred_model2.get(k, 0.0) for k in BIOMASS_KEYS], dtype=float)
+    if gt_row is not None:
+        st.markdown("### Summary vs ground truth for core components")
 
-    mean1 = float(vals1.mean())
-    mean2 = float(vals2.mean())
+        col_gt = "Ground truth (g)"
+        col1 = f"{model_1_name} error"
+        col2 = f"{model_2_name} error"
 
-    st.markdown(
-        f"- Mean predicted biomass for **{model_1_name}**: `{mean1:.3f}` g\n"
-        f"- Mean predicted biomass for **{model_2_name}**: `{mean2:.3f}` g"
-    )
+        rows = []
+        for key in CORE_BIOMASS_KEYS:
+            label = BIOMASS_DISPLAY[key]
+            gt_val = float(gt_row[key])
+            p1 = float(pred_model1.get(key, 0.0))
+            p2 = float(pred_model2.get(key, 0.0))
+
+            err1 = gt_val - p1  # signed error
+            err2 = gt_val - p2  # signed error
+
+            rows.append(
+                {
+                    "Biomass": label,
+                    col_gt: gt_val,
+                    col1: err1,
+                    col2: err2,
+                }
+            )
+
+        df_core = pd.DataFrame(rows)
+
+        # ----- body cell styling (relative error) stays the same -----
+        def _style_row(row: pd.Series) -> List[str]:
+            styles = [""] * len(row)
+
+            gt_val = float(row[col_gt])
+            denom = max(abs(gt_val), 1.0)
+
+            e1 = float(row[col1])
+            e2 = float(row[col2])
+            rel1 = abs(e1) / denom
+            rel2 = abs(e2) / denom
+
+            both_close = rel1 <= CLOSE_REL and rel2 <= CLOSE_REL
+            diff_big = abs(rel1 - rel2) >= DIFF_REL
+            both_far = rel1 >= FAR_REL and rel2 >= FAR_REL
+            max_rel = max(rel1, rel2)
+
+            idx_gt = row.index.get_loc(col_gt)
+            idx1 = row.index.get_loc(col1)
+            idx2 = row.index.get_loc(col2)
+
+            GT_BG = "background-color: #F5F5F5;"
+            GOOD_BG = "background-color: #C8E6C9;"
+            BAD_BG = "background-color: #FFCCBC;"
+
+            styles[idx_gt] = GT_BG
+
+            if both_close:
+                styles[idx1] = GOOD_BG
+                styles[idx2] = GOOD_BG
+            else:
+                if diff_big:
+                    if rel1 < rel2:
+                        styles[idx1] = GOOD_BG
+                        if rel2 >= CLOSE_REL:
+                            styles[idx2] = BAD_BG
+                    else:
+                        styles[idx2] = GOOD_BG
+                        if rel1 >= CLOSE_REL:
+                            styles[idx1] = BAD_BG
+                else:
+                    if both_far or max_rel >= FAR_REL:
+                        styles[idx1] = BAD_BG
+                        styles[idx2] = BAD_BG
+
+            return styles
+
+        styled = df_core.style.apply(_style_row, axis=1).format(
+            {
+                col_gt: "{:.2f}",
+                col1: "{:+.2f}",
+                col2: "{:+.2f}",
+            }
+        )
+
+        # ----- header colors (works with st.table, not st.dataframe) -----
+        # columns: [Biomass, Ground truth, model1, model2]
+        # index column is first <th>, so headers are nth-child(2..4)
+        styled = styled.set_table_styles(
+            [
+                # GT header
+                {
+                    "selector": "th.col_heading.level0:nth-child(3)",
+                    "props": [("background-color", "#4CAF50"), ("color", "white")],
+                },
+                # Model 1 header
+                {
+                    "selector": "th.col_heading.level0:nth-child(4)",
+                    "props": [("background-color", "#1565C0"), ("color", "white")],
+                },
+                # Model 2 header
+                {
+                    "selector": "th.col_heading.level0:nth-child(5)",
+                    "props": [("background-color", "#90CAF9"), ("color", "black")],
+                },
+            ],
+            overwrite=False,
+        )
+
+        # IMPORTANT: use st.table, not st.dataframe
+        st.table(styled)
+
+        st.caption(
+            "Signed error = Ground truth − prediction (grams). "
+            "Cell background uses **relative error** per component (close vs far), "
+            "while header colors match the bar chart legend."
+        )
+
+    else:
+        st.markdown("### Summary (no ground truth available)")
+        vals1 = np.array([pred_model1.get(k, 0.0) for k in BIOMASS_KEYS], dtype=float)
+        vals2 = np.array([pred_model2.get(k, 0.0) for k in BIOMASS_KEYS], dtype=float)
+
+        mean1 = float(vals1.mean())
+        mean2 = float(vals2.mean())
+
+        st.markdown(
+            f"- Mean predicted biomass for **{model_1_name}**: `{mean1:.3f}` g\n"
+            f"- Mean predicted biomass for **{model_2_name}**: `{mean2:.3f}` g"
+        )
+
 
 
 # -----------------------------------------------------------------------------
@@ -503,7 +629,7 @@ def _show_heatmap_values(
         vmax = float(arr.max())
 
     rgb_u8 = _heatmap_to_rgb(arr, vmin=vmin, vmax=vmax, cmap_name=cmap_name)
-    st.image(rgb_u8, use_column_width=True)
+    st.image(rgb_u8, use_container_width=True)
 
 
 def _show_overlay(
@@ -544,4 +670,4 @@ def _show_overlay(
     overlay = (1.0 - alpha) * base_np + alpha * hm_np
     overlay_u8 = (overlay * 255).astype(np.uint8)
 
-    st.image(overlay_u8, use_column_width=True)
+    st.image(overlay_u8, use_container_width=True)

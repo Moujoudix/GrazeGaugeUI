@@ -33,7 +33,7 @@ def init_predict_state() -> None:
             "batch_summary": None,         # dict or None
             "show_advanced": False,
             "last_model_id": None,
-            "last_aux_heads": False,
+            #"last_aux_heads": False,
             "api_error": None,
         }
 
@@ -81,16 +81,7 @@ def _render_predict_controls(state: Dict[str, Any]) -> None:
             key="predict_model_select",
         )
 
-        supports_aux = MODEL_METADATA[model_id].get("supports_aux", False)
-        aux_heads = st.checkbox(
-            "Use AUX heads",
-            value=supports_aux,  # default ON if supported
-            key="predict_aux_heads",
-            disabled=not supports_aux,
-            help=None if supports_aux else "AUX heads not available for this model.",
-        )
-
-        _render_model_description_card(model_id, aux_heads)
+        _render_model_description_card(model_id)
 
     with col_upload:
         st.subheader("1. Upload images & run")
@@ -109,10 +100,10 @@ def _render_predict_controls(state: Dict[str, Any]) -> None:
         state["show_advanced"] = False
 
         if st.button("Run prediction", type="primary", key="predict_run_button"):
-            _handle_run_prediction(state, model_id, aux_heads)
+            _handle_run_prediction(state, model_id)
 
 
-def _render_model_description_card(model_id: str, aux_heads: bool) -> None:
+def _render_model_description_card(model_id: str) -> None:
     meta = MODEL_METADATA[model_id]
     with st.expander("Model info", expanded=True):
         st.markdown(f"**Model:** {meta.get('display_name', model_id)}")
@@ -130,20 +121,11 @@ def _render_model_description_card(model_id: str, aux_heads: bool) -> None:
         if desc:
             st.markdown(f"**Description:** {desc}")
 
-        # AUX text is now purely educational (backend doesn't know about AUX)
-        aux_text = (
-            "AUX heads are **enabled** in this run (frontend concept). "
-            "In future versions, AUX variants of the models could be exposed separately."
-            if aux_heads
-            else "AUX heads are **disabled** in this run."
-        )
-        st.markdown(aux_text)
 
 
 def _handle_run_prediction(
     state: Dict[str, Any],
     model_id: str,
-    aux_heads: bool,
 ) -> None:
     uploaded_files = state.get("uploaded_files") or []
     if not uploaded_files:
@@ -156,7 +138,7 @@ def _handle_run_prediction(
         try:
             response = call_predict_api(
                 images=uploaded_files,
-                model_name=model_id
+                model_name=model_id,
             )
         except Exception as exc:  # noqa: BLE001
             state["api_error"] = str(exc)
@@ -170,7 +152,6 @@ def _handle_run_prediction(
     state["predictions_by_filename"] = predictions
     state["raw_response"] = response
     state["last_model_id"] = model_id
-    state["last_aux_heads"] = aux_heads
 
     # Compute batch summary if multiple images
     if len(predictions) > 1:
@@ -190,19 +171,27 @@ def _parse_prediction_response(response: Dict[str, Any]) -> Dict[str, Dict[str, 
     Convert API JSON into:
     {
       "filename.jpg": {
-          "biomass": { biom_key: float, ... }
+          "biomass": {...},
+          "uncertainty": {...}   # NEW
       },
       ...
     }
     """
-    preds = {}
+    preds: Dict[str, Dict[str, Any]] = {}
     raw_preds = response.get("predictions", [])
 
     for item in raw_preds:
         filename = item.get("filename", "unknown")
-        biomass = item.get("biomass", {})
+        biomass = item.get("biomass", {}) or {}
+        uncertainty = item.get("uncertainty", {}) or {}
+
         clean_biomass = {k: float(biomass.get(k, 0.0)) for k in BIOMASS_KEYS}
-        preds[filename] = {"biomass": clean_biomass}
+        clean_uncertainty = {k: float(uncertainty.get(k, 0.0)) for k in BIOMASS_KEYS}
+
+        preds[filename] = {
+            "biomass": clean_biomass,
+            "uncertainty": clean_uncertainty,   # NEW
+        }
 
     return preds
 
@@ -237,13 +226,18 @@ def _render_predict_results(state: Dict[str, Any]) -> None:
     filenames = list(preds.keys())
     if len(filenames) == 1:
         filename = filenames[0]
+        biomass = preds[filename]["biomass"]
+        uncertainty = preds[filename].get("uncertainty")
+
         _render_single_prediction_card(
             filename=filename,
-            biomass=preds[filename]["biomass"],
+            biomass=biomass,
             show_advanced=show_advanced,
             raw_response=state.get("raw_response"),
             uploaded_files=uploaded_files,
+            uncertainty=uncertainty,
         )
+
     else:
         batch_summary = state.get("batch_summary")
         if batch_summary is not None:
@@ -272,7 +266,9 @@ def _render_single_prediction_card(
     show_advanced: bool,
     raw_response: Dict[str, Any] | None,
     uploaded_files: List[Any],
-    show_image: bool = True,   # NEW PARAM
+    uncertainty: Optional[Dict[str, float]] = None,  # NEW
+    show_image: bool = True,
+    show_table:bool = True,
 ) -> None:
     """
     Single-image layout:
@@ -291,20 +287,15 @@ def _render_single_prediction_card(
         # Image at the top (if requested)
         if show_image:
             if file_obj is not None:
-                st.image(file_obj, use_column_width=True, caption=filename)
+                st.image(file_obj, use_container_width=True, caption=filename)
             else:
                 st.warning("Could not find the original image in uploaded files.")
 
         # Table just under the image
-        st.markdown("**Biomass estimates**")
-        df = pd.DataFrame(
-            {
-                "Biomass": [BIOMASS_DISPLAY[k] for k in BIOMASS_KEYS],
-                "Value": [biomass.get(k, 0.0) for k in BIOMASS_KEYS],
-                "CI": ["–" for _ in BIOMASS_KEYS],  # placeholder for future CIs
-            }
-        )
-        st.table(df)
+        if show_table:
+            st.markdown("**Biomass estimates**")
+            df = _build_biomass_table(biomass, uncertainty)
+            st.table(df)
 
         # 2-chart "subplot" row
         st.markdown("**Visualizations**")
@@ -371,6 +362,32 @@ def _render_biomass_radar_chart(biomass: Dict[str, float]) -> None:
     )
     st.plotly_chart(fig, use_container_width=True)
 
+def _build_biomass_table(
+    biomass: Dict[str, float],
+    uncertainty: Optional[Dict[str, float]] = None,
+) -> pd.DataFrame:
+    """
+    Build a table with biomass values and optional uncertainty (±).
+    If uncertainty is None, the column will be filled with '–'.
+    """
+    rows = []
+    for key in BIOMASS_KEYS:
+        value = float(biomass.get(key, 0.0))
+        if uncertainty is not None:
+            unc = float(uncertainty.get(key, 0.0))
+            unc_str = f"±{unc:.2f}"
+        else:
+            unc_str = "––"
+
+        rows.append(
+            {
+                "Biomass": BIOMASS_DISPLAY[key],
+                "Value": value,
+                "Uncertainty (±)": unc_str,
+            }
+        )
+
+    return pd.DataFrame(rows)
 
 # -----------------------------------------------------------------------------
 # Batch summary & grid
@@ -499,13 +516,11 @@ def _render_prediction_grid_multi(
                 st.image(file_obj, use_container_width=True)
 
             biomass = predictions[filename]["biomass"]
-            df = pd.DataFrame(
-                {
-                    "Biomass": [BIOMASS_DISPLAY[k] for k in BIOMASS_KEYS],
-                    "Value": [biomass.get(k, 0.0) for k in BIOMASS_KEYS],
-                }
-            )
+            uncertainty = predictions[filename].get("uncertainty")
+
+            df = _build_biomass_table(biomass, uncertainty)
             st.table(df)
+
 
             with st.expander("View full details"):
                 _render_single_prediction_card(
@@ -514,5 +529,7 @@ def _render_prediction_grid_multi(
                     show_advanced=show_advanced,
                     raw_response=raw_response,
                     uploaded_files=uploaded_files,
-                    show_image=False
+                    uncertainty=uncertainty,
+                    show_image=False,
+                    show_table=False,
                 )

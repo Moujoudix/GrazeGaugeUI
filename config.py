@@ -20,7 +20,7 @@ COMPARE_URL = f"{API_BASE_URL}/compare"
 API_TIMEOUT_SECONDS = 60  # a bit higher for Grad-CAM in /compare
 
 # -----------------------------------------------------------------------------
-# App-level config (unchanged)
+# App-level config
 # -----------------------------------------------------------------------------
 APP_TITLE = "PastureVision: Estimating Pasture Biomass from Images"
 APP_SUBTITLE = (
@@ -29,7 +29,7 @@ APP_SUBTITLE = (
 )
 
 # -----------------------------------------------------------------------------
-# Biomass configuration (unchanged)
+# Biomass configuration
 # -----------------------------------------------------------------------------
 BIOMASS_KEYS: List[str] = [
     "Dry_Green_g",
@@ -60,11 +60,12 @@ BIOMASS_COLORS: Dict[str, str] = {
 # -----------------------------------------------------------------------------
 # Model metadata placeholders
 # -----------------------------------------------------------------------------
-# These will now be filled from /models at runtime, not hard-coded
+# Filled from /models at runtime, not hard-coded
 MODEL_METADATA: Dict[str, Dict[str, Any]] = {}
 MODEL_ORDER: List[str] = []
 
-# Educational Lab focus options are still valid
+# Educational Lab focus options
+CORE_BIOMASS_KEYS = ["Dry_Green_g", "Dry_Clover_g", "Dry_Dead_g"]
 FOCUS_OPTIONS = ["Dry_Green_g", "Dry_Clover_g", "Dry_Dead_g"]
 FOCUS_TO_LABEL = {
     "Dry_Green_g": "Green biomass",
