@@ -4,6 +4,7 @@ plotly
 # Sreamlit and extensions
 streamlit
 requests
+st-clickable-images>=0.0.3
 
 # Data science
-# pandas
+pandas

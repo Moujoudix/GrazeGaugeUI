@@ -34,14 +34,28 @@ def load_ground_truth_table() -> pd.DataFrame:
 
 @st.cache_data
 def load_example_filenames(n: int = N_EDU_GRID_IMAGES) -> List[str]:
-    df = load_ground_truth_table()
-    col = "filename" if "filename" in df.columns else "image_id"
-    values = df[col].dropna().unique()
-    if len(values) <= n:
-        return list(values)
+    """
+    Pick example filenames from what actually exists in VALIDATION_IMAGES_DIR,
+    not from wide.csv. We still use wide.csv later for GT lookup if available.
+    """
+    if not os.path.isdir(VALIDATION_IMAGES_DIR):
+        return []
+
+    all_files = [
+        f
+        for f in os.listdir(VALIDATION_IMAGES_DIR)
+        if f.lower().endswith((".jpg", ".jpeg", ".png"))
+    ]
+
+    if not all_files:
+        return []
+
+    if len(all_files) <= n:
+        return sorted(all_files)
+
     rng = np.random.default_rng(42)
-    idx = rng.choice(len(values), size=n, replace=False)
-    return [values[i] for i in idx]
+    idx = rng.choice(len(all_files), size=n, replace=False)
+    return [all_files[i] for i in idx]
 
 def _load_pil_from_filename(filename: str) -> Image.Image:
     path = os.path.join(VALIDATION_IMAGES_DIR, filename)
