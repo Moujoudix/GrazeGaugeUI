@@ -136,7 +136,7 @@ def _render_educational_controls(state: Dict[str, Any]) -> None:
         )
         state["example_image"] = uploaded
         if uploaded:
-            st.image(uploaded, use_container_width=True)
+            st.image(uploaded, width='stretch')
 
     st.markdown("**3. Run comparison**")
     if st.button("Compare on this image", type="primary", key="edu_compare_button"):
@@ -342,7 +342,7 @@ def _render_comparison_bar_chart(
 
     chart = (bars + labels).properties(height=350)
 
-    st.altair_chart(chart, use_container_width=True)
+    st.altair_chart(chart, width='stretch')
 
 
 def _render_summary_with_optional_gt(
@@ -629,7 +629,7 @@ def _show_heatmap_values(
         vmax = float(arr.max())
 
     rgb_u8 = _heatmap_to_rgb(arr, vmin=vmin, vmax=vmax, cmap_name=cmap_name)
-    st.image(rgb_u8, use_container_width=True)
+    st.image(rgb_u8, width='stretch')
 
 
 def _show_overlay(
@@ -670,4 +670,4 @@ def _show_overlay(
     overlay = (1.0 - alpha) * base_np + alpha * hm_np
     overlay_u8 = (overlay * 255).astype(np.uint8)
 
-    st.image(overlay_u8, use_container_width=True)
+    st.image(overlay_u8, width='stretch')

@@ -287,7 +287,7 @@ def _render_single_prediction_card(
         # Image at the top (if requested)
         if show_image:
             if file_obj is not None:
-                st.image(file_obj, use_container_width=True, caption=filename)
+                st.image(file_obj, width='stretch', caption=filename)
             else:
                 st.warning("Could not find the original image in uploaded files.")
 
@@ -334,7 +334,7 @@ def _render_biomass_bar_chart(biomass: Dict[str, float]) -> None:
         .properties(height=300)
     )
 
-    st.altair_chart(chart, use_container_width=True)
+    st.altair_chart(chart, width='stretch')
 
 
 def _render_biomass_radar_chart(biomass: Dict[str, float]) -> None:
@@ -360,7 +360,7 @@ def _render_biomass_radar_chart(biomass: Dict[str, float]) -> None:
         showlegend=False,
         height=300,
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
 
 def _build_biomass_table(
     biomass: Dict[str, float],
@@ -513,7 +513,7 @@ def _render_prediction_grid_multi(
             st.markdown(f"**{filename}**")
             file_obj = _find_uploaded_file(uploaded_files, filename)
             if file_obj is not None:
-                st.image(file_obj, use_container_width=True)
+                st.image(file_obj, width='stretch')
 
             biomass = predictions[filename]["biomass"]
             uncertainty = predictions[filename].get("uncertainty")
