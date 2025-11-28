@@ -1,5 +1,6 @@
 from __future__ import annotations
-from typing import Any, Dict, Optional, Tuple, List
+from typing import Any, Dict, Optional, Tuple, List, Union
+from streamlit.runtime.uploaded_file_manager import UploadedFile
 import os
 import numpy as np
 import pandas as pd
@@ -17,8 +18,9 @@ from config import (
     FOCUS_OPTIONS,
     FOCUS_TO_LABEL,
     CORE_BIOMASS_KEYS,
+    VALIDATION_IMAGES_DIR,
+    N_EDU_GRID_IMAGES,
 )
-
 
 # Relative thresholds (tune as you want)
 CLOSE_REL = 0.05   # both models considered "close" if <= 10% relative error
@@ -28,15 +30,23 @@ DIFF_REL  = 0.10   # difference in relative error considered "large" if >= 10 po
 
 @st.cache_data
 def load_ground_truth_table() -> pd.DataFrame:
-    """
-    Load the wide CSV with ground truth biomass values.
+    return pd.read_csv("data/wide.csv")  # you already have something like this
 
-    Expected columns:
-      - 'image_id' (matching uploaded filename without extension)
-      - one column per BIOMASS_KEYS
-    """
-    df = pd.read_csv("data/wide.csv")
-    return df
+@st.cache_data
+def load_example_filenames(n: int = N_EDU_GRID_IMAGES) -> List[str]:
+    df = load_ground_truth_table()
+    col = "filename" if "filename" in df.columns else "image_id"
+    values = df[col].dropna().unique()
+    if len(values) <= n:
+        return list(values)
+    rng = np.random.default_rng(42)
+    idx = rng.choice(len(values), size=n, replace=False)
+    return [values[i] for i in idx]
+
+def _load_pil_from_filename(filename: str) -> Image.Image:
+    path = os.path.join(VALIDATION_IMAGES_DIR, filename)
+    img = Image.open(path).convert("RGB")
+    return img
 
 
 def get_ground_truth_row_for_filename(filename: str) -> Optional[pd.Series]:
@@ -61,22 +71,24 @@ def get_ground_truth_row_for_filename(filename: str) -> Optional[pd.Series]:
 # State
 # -----------------------------------------------------------------------------
 def init_educational_state() -> None:
-    """
-    State for the Educational Lab page.
-
-    - model_1_id / model_2_id: selected model names
-    - example_image: UploadedFile from Streamlit
-    - comparison_result: raw JSON from /compare
-    - focus: current biomass key focus (one of FOCUS_OPTIONS)
-    - api_error: last API error (if any)
-    """
     if "edu_state" not in st.session_state:
         st.session_state["edu_state"] = {
             "model_1_id": None,
             "model_2_id": None,
-            "example_image": None,       # UploadedFile
-            "comparison_result": None,   # raw JSON from /compare
-            "focus": FOCUS_OPTIONS[0],   # default first key
+
+            # Custom upload
+            "uploaded_image": None,          # UploadedFile
+
+            # Dataset examples
+            "use_custom_image": False,
+            "selected_example_filename": None,
+
+            # For the *current* comparison (either source)
+            "current_image_filename": None,  # str, used for GT lookup
+            "current_image_pil": None,       # PIL.Image.Image for overlays
+
+            "comparison_result": None,
+            "focus": FOCUS_OPTIONS[0],
             "api_error": None,
         }
 
@@ -99,12 +111,10 @@ def render_educational_lab_page() -> None:
 def _render_educational_controls(state: Dict[str, Any]) -> None:
     st.subheader("Model comparison on a single image")
 
-    col_models, col_image = st.columns([1, 1])
+    # 1. Choose two models (side by side)
+    col_m1, col_m2 = st.columns(2)
 
-    # Model selection
-    with col_models:
-        st.markdown("**1. Choose two models**")
-
+    with col_m1:
         model_1_id = st.selectbox(
             "Model 1",
             options=[None] + MODEL_ORDER,
@@ -114,6 +124,7 @@ def _render_educational_controls(state: Dict[str, Any]) -> None:
             key="edu_model_1",
         )
 
+    with col_m2:
         model_2_id = st.selectbox(
             "Model 2",
             options=[None] + MODEL_ORDER,
@@ -123,24 +134,152 @@ def _render_educational_controls(state: Dict[str, Any]) -> None:
             key="edu_model_2",
         )
 
-        state["model_1_id"] = model_1_id
-        state["model_2_id"] = model_2_id
+    state["model_1_id"] = model_1_id
+    state["model_2_id"] = model_2_id
 
-    # Image upload
-    with col_image:
-        st.markdown("**2. Upload an image to compare on**")
+    # 2. Choose image source
+    st.markdown("**2. Choose an image**")
+
+    use_custom = st.checkbox(
+        "Use your own image (upload)",
+        key="edu_use_custom_image",
+        value=state.get("use_custom_image", False),
+    )
+    state["use_custom_image"] = use_custom
+
+    if use_custom:
+        # --- Custom upload mode ---
         uploaded = st.file_uploader(
             "Upload a single pasture image",
             type=["jpg", "jpeg", "png"],
             key="edu_image_uploader",
         )
-        state["example_image"] = uploaded
-        if uploaded:
-            st.image(uploaded, width='stretch')
+        state["uploaded_image"] = uploaded
 
-    st.markdown("**3. Run comparison**")
-    if st.button("Compare on this image", type="primary", key="edu_compare_button"):
-        _handle_compare(state)
+        if uploaded:
+            st.image(uploaded, use_column_width=True)
+
+        if st.button("Compare on this image", type="primary", key="edu_compare_custom"):
+            _handle_compare_custom(state)
+    else:
+        # --- Dataset example mode ---
+        filenames = load_example_filenames(N_EDU_GRID_IMAGES)
+        st.caption("Click on an example image below to run the comparison.")
+
+        _render_example_grid(state, filenames)
+
+
+def _render_example_grid(state: Dict[str, Any], filenames: List[str]) -> None:
+    n_cols = 3
+    rows = [filenames[i : i + n_cols] for i in range(0, len(filenames), n_cols)]
+
+    for row in rows:
+        cols = st.columns(len(row))
+        for col, filename in zip(cols, row):
+            with col:
+                try:
+                    img = _load_pil_from_filename(filename)
+                    st.image(img, use_column_width=True)
+                except Exception as exc:  # noqa: BLE001
+                    st.error(f"Failed to load {filename}: {exc}")
+                    continue
+
+                if st.button("Use this image", key=f"edu_use_{filename}"):
+                    _handle_compare_dataset_example(state, filename, img)
+
+
+def _handle_compare_custom(state: Dict[str, Any]) -> None:
+    model_1_id = state["model_1_id"]
+    model_2_id = state["model_2_id"]
+    img = state.get("uploaded_image")
+
+    if model_1_id is None or model_2_id is None:
+        st.warning("Please select both Model 1 and Model 2.")
+        return
+    if img is None:
+        st.warning("Please upload an image to compare on.")
+        return
+
+    state["api_error"] = None
+
+    with st.spinner("Running comparison and Grad-CAM..."):
+        try:
+            result = call_compare_api(
+                image=img,
+                model_1=model_1_id,
+                model_2=model_2_id,
+                method="grad_cam",
+            )
+        except Exception as exc:  # noqa: BLE001
+            state["api_error"] = str(exc)
+            try:
+                st.toast(f"Comparison failed: {exc}", icon="❌")
+            except Exception:
+                st.error(f"Comparison failed: {exc}")
+            return
+
+    # Store result + current image info for downstream plots
+    state["comparison_result"] = result
+    state["current_image_filename"] = img.name
+    state["current_image_pil"] = Image.open(img).convert("RGB")
+    state["selected_example_filename"] = None  # not a dataset example
+
+    try:
+        st.toast("Comparison ready!", icon="📊")
+    except Exception:
+        st.success("Comparison ready!")
+
+def _handle_compare_dataset_example(
+    state: Dict[str, Any],
+    filename: str,
+    pil_image: Image.Image,
+) -> None:
+    model_1_id = state["model_1_id"]
+    model_2_id = state["model_2_id"]
+
+    if model_1_id is None or model_2_id is None:
+        st.warning("Please select both Model 1 and Model 2.")
+        return
+
+    # Load raw bytes from disk to send to backend
+    path = os.path.join(VALIDATION_IMAGES_DIR, filename)
+    try:
+        with open(path, "rb") as f:
+            img_bytes = f.read()
+    except OSError as exc:
+        st.error(f"Could not read image file {path}: {exc}")
+        return
+
+    image_tuple = (filename, img_bytes, "image/jpeg")  # adjust mime if needed
+
+    state["api_error"] = None
+
+    with st.spinner("Running comparison and Grad-CAM on selected example..."):
+        try:
+            result = call_compare_api(
+                image=image_tuple,
+                model_1=model_1_id,
+                model_2=model_2_id,
+                method="grad_cam",
+            )
+        except Exception as exc:  # noqa: BLE001
+            state["api_error"] = str(exc)
+            try:
+                st.toast(f"Comparison failed: {exc}", icon="❌")
+            except Exception:
+                st.error(f"Comparison failed: {exc}")
+            return
+
+    state["comparison_result"] = result
+    state["current_image_filename"] = filename
+    state["current_image_pil"] = pil_image
+    state["selected_example_filename"] = filename
+    state["uploaded_image"] = None  # to avoid confusion
+
+    try:
+        st.toast("Comparison ready!", icon="📊")
+    except Exception:
+        st.success("Comparison ready!")
 
 
 def _handle_compare(state: Dict[str, Any]) -> None:
@@ -190,8 +329,8 @@ def _render_comparison_result(state: Dict[str, Any]) -> None:
     result = state.get("comparison_result")
     if not result:
         st.info(
-            "No comparison yet. Choose two models, upload an image, "
-            "and click **Compare on this image**."
+            "No comparison yet. Choose two models and either "
+            "click on a dataset example or upload your own image."
         )
         return
 
@@ -210,11 +349,11 @@ def _render_comparison_result(state: Dict[str, Any]) -> None:
         "display_name", m2["model_name"]
     )
 
-    # NEW: ground-truth lookup based on uploaded filename
-    uploaded = state.get("example_image")
+    # Ground truth for the current image (if it exists in wide.csv)
+    current_filename = state.get("current_image_filename")
     gt_row = None
-    if uploaded is not None:
-        gt_row = get_ground_truth_row_for_filename(uploaded.name)
+    if current_filename is not None:
+        gt_row = get_ground_truth_row_for_filename(current_filename)
 
     st.subheader("Biomass predictions comparison")
 
@@ -223,15 +362,15 @@ def _render_comparison_result(state: Dict[str, Any]) -> None:
         pred_model2=m2["biomass"],
         model_1_name=model_1_name,
         model_2_name=model_2_name,
-        gt_row=gt_row,  # <-- pass GT row (Series) or None
+        gt_row=gt_row,
     )
 
     _render_summary_with_optional_gt(
-    pred_model1=m1["biomass"],
-    pred_model2=m2["biomass"],
-    model_1_name=model_1_name,
-    model_2_name=model_2_name,
-    gt_row=gt_row,
+        pred_model1=m1["biomass"],
+        pred_model2=m2["biomass"],
+        model_1_name=model_1_name,
+        model_2_name=model_2_name,
+        gt_row=gt_row,
     )
 
     st.markdown("---")
@@ -523,7 +662,7 @@ def _render_explainability_section(
     hm2 = heatmaps2.get(focus)
 
     uploaded = state.get("example_image")
-    base_image: Optional[Image.Image] = None
+    base_image: Optional[Image.Image] = state.get("current_image_pil")
     if uploaded is not None:
         # Convert UploadedFile to PIL Image
         base_image = Image.open(uploaded).convert("RGB")

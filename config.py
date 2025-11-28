@@ -72,3 +72,6 @@ FOCUS_TO_LABEL = {
     "Dry_Clover_g": "Clover biomass",
     "Dry_Dead_g": "Dead biomass",
 }
+
+VALIDATION_IMAGES_DIR = "data/edu_images"
+N_EDU_GRID_IMAGES = 9

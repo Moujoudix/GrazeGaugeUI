@@ -1,10 +1,11 @@
 # api_client.py
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Union, Tuple
 import requests
 from streamlit.runtime.uploaded_file_manager import UploadedFile
-
 from config import MODELS_URL, PREDICT_URL, COMPARE_URL, API_TIMEOUT_SECONDS
 
+
+ImageInput = Union[UploadedFile, Tuple[str, bytes, str]]
 
 # -----------------------------------------------------------------------------
 # 1. Fetch models metadata
@@ -86,32 +87,21 @@ def call_predict_api(
 # 3. Comparison + Grad-CAM for Educational Lab (POST /compare)
 # -----------------------------------------------------------------------------
 def call_compare_api(
-    image: UploadedFile,
+    image: ImageInput,
     model_1: str,
     model_2: str,
     method: str = "grad_cam",
 ) -> Dict[str, Any]:
-    """
-    Call POST /compare with a single image and two model names.
-
-    Returns backend JSON, e.g.:
-
-    {
-      "models": [
-        {
-          "model_name": "effnetv2_s_baseline",
-          "biomass": {...},
-          "explanation": {...}
-        },
-        {...}
-      ]
-    }
-    """
-    file_bytes = image.getvalue()
-    mime_type = image.type or "image/jpeg"
+    # Accept UploadedFile OR (filename, bytes, mime_type)
+    if isinstance(image, UploadedFile):
+        file_bytes = image.getvalue()
+        filename = image.name
+        mime_type = image.type or "image/jpeg"
+    else:
+        filename, file_bytes, mime_type = image
 
     files = [
-        ("file", (image.name, file_bytes, mime_type)),
+        ("file", (filename, file_bytes, mime_type)),
     ]
     data = {
         "model_1": model_1,
@@ -119,11 +109,6 @@ def call_compare_api(
         "method": method,
     }
 
-    resp = requests.post(
-        COMPARE_URL,
-        data=data,
-        files=files,
-        timeout=API_TIMEOUT_SECONDS,
-    )
+    resp = requests.post(COMPARE_URL, files=files, data=data, timeout=30)
     resp.raise_for_status()
     return resp.json()
