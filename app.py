@@ -6,6 +6,9 @@ from ui_predict import render_predict_page, init_predict_state
 from ui_educational import render_educational_lab_page, init_educational_state
 from ui_about import render_about_page
 from api_client import fetch_models
+from streamlit_option_menu import option_menu
+
+
 
 
 def setup_page() -> None:
@@ -22,14 +25,49 @@ def render_header() -> None:
 
 
 def render_top_nav() -> str:
-    page = st.radio(
-        "Navigation",
+# --- Navigation bar ---
+    selected = option_menu(
+        menu_title=None,  # no extra title
         options=["Predict", "Educational Lab", "About & Credits"],
-        index=0,
-        horizontal=True,
+        icons=["camera", "bezier", "info-circle"],  # Bootstrap icon names
+        orientation="horizontal",
+        default_index=0,
+        styles={
+            "container": {
+                "padding": "0.25rem 0",
+                "background-color": "rgba(0,0,0,0)",
+                "justify-content": "center",
+            },
+            "nav": {
+                "justify-content": "center",
+            },
+            "nav-item": {
+                "margin": "0 0.4rem",
+            },
+            "nav-link": {
+                "font-size": "17px",
+                "font-weight": "500",
+                "border-radius": "999px",
+                "padding": "0.35rem 1.3rem",
+                "color": "#374151",
+                "background-color": "#F3F4F6",
+                "border": "1px solid #E5E7EB",
+                "box-shadow": "0 2px 4px rgba(0,0,0,0.04)",
+                "transition": "all 200ms ease-in-out",
+            },
+            "nav-link-hover": {
+                "background-color": "#E8F5E9",
+                "color": "#1B5E20",
+            },
+            "nav-link-selected": {
+                "background": "linear-gradient(90deg, #4CAF50, #26A69A)",
+                "color": "white",
+                "box-shadow": "0 4px 10px rgba(0,0,0,0.18)",
+                "border": "none",
+            },
+        },
     )
-    st.markdown("---")
-    return page
+    return selected
 
 
 def init_models() -> None:

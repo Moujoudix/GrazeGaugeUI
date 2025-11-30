@@ -8,6 +8,8 @@ import matplotlib.cm as cm
 import streamlit as st
 import altair as alt
 from PIL import Image
+import base64
+from st_clickable_images import clickable_images
 from api_client import call_compare_api
 from config import (
     BIOMASS_KEYS,
@@ -33,10 +35,12 @@ def load_ground_truth_table() -> pd.DataFrame:
     return pd.read_csv("data/wide.csv")  # you already have something like this
 
 @st.cache_data
-def load_example_filenames(n: int = N_EDU_GRID_IMAGES) -> List[str]:
+def load_example_images_for_grid(n: int = N_EDU_GRID_IMAGES):
     """
-    Pick example filenames from what actually exists in VALIDATION_IMAGES_DIR,
-    not from wide.csv. We still use wide.csv later for GT lookup if available.
+    Return a list of dicts with:
+        - filename
+        - data_uri (base64-encoded image for st-clickable-images)
+    Images are sampled from VALIDATION_IMAGES_DIR.
     """
     if not os.path.isdir(VALIDATION_IMAGES_DIR):
         return []
@@ -46,16 +50,28 @@ def load_example_filenames(n: int = N_EDU_GRID_IMAGES) -> List[str]:
         for f in os.listdir(VALIDATION_IMAGES_DIR)
         if f.lower().endswith((".jpg", ".jpeg", ".png"))
     ]
-
     if not all_files:
         return []
 
-    if len(all_files) <= n:
-        return sorted(all_files)
+    if len(all_files) > n:
+        rng = np.random.default_rng(42)
+        idx = rng.choice(len(all_files), size=n, replace=False)
+        selected = [all_files[i] for i in idx]
+    else:
+        selected = sorted(all_files)
 
-    rng = np.random.default_rng(42)
-    idx = rng.choice(len(all_files), size=n, replace=False)
-    return [all_files[i] for i in idx]
+    items = []
+    for fname in selected:
+        path = os.path.join(VALIDATION_IMAGES_DIR, fname)
+        try:
+            with open(path, "rb") as f:
+                encoded = base64.b64encode(f.read()).decode()
+        except OSError:
+            continue
+        data_uri = f"data:image/jpeg;base64,{encoded}"
+        items.append({"filename": fname, "data_uri": data_uri})
+
+    return items
 
 def _load_pil_from_filename(filename: str) -> Image.Image:
     path = os.path.join(VALIDATION_IMAGES_DIR, filename)
@@ -171,35 +187,13 @@ def _render_educational_controls(state: Dict[str, Any]) -> None:
         state["uploaded_image"] = uploaded
 
         if uploaded:
-            st.image(uploaded, use_column_width=True)
+            st.image(uploaded, width='stretch')
 
         if st.button("Compare on this image", type="primary", key="edu_compare_custom"):
             _handle_compare_custom(state)
     else:
         # --- Dataset example mode ---
-        filenames = load_example_filenames(N_EDU_GRID_IMAGES)
-        st.caption("Click on an example image below to run the comparison.")
-
-        _render_example_grid(state, filenames)
-
-
-def _render_example_grid(state: Dict[str, Any], filenames: List[str]) -> None:
-    n_cols = 3
-    rows = [filenames[i : i + n_cols] for i in range(0, len(filenames), n_cols)]
-
-    for row in rows:
-        cols = st.columns(len(row))
-        for col, filename in zip(cols, row):
-            with col:
-                try:
-                    img = _load_pil_from_filename(filename)
-                    st.image(img, use_column_width=True)
-                except Exception as exc:  # noqa: BLE001
-                    st.error(f"Failed to load {filename}: {exc}")
-                    continue
-
-                if st.button("Use this image", key=f"edu_use_{filename}"):
-                    _handle_compare_dataset_example(state, filename, img)
+        _render_example_grid(state)
 
 
 def _handle_compare_custom(state: Dict[str, Any]) -> None:
@@ -243,6 +237,52 @@ def _handle_compare_custom(state: Dict[str, Any]) -> None:
     except Exception:
         st.success("Comparison ready!")
 
+def _render_example_grid(state: Dict[str, Any]) -> None:
+    items = load_example_images_for_grid(N_EDU_GRID_IMAGES)
+    if not items:
+        st.warning("No example images found in the validation images folder.")
+        return
+
+    images = [it["data_uri"] for it in items]
+    titles = [it["filename"] for it in items]
+
+    st.caption("Click on an example image below to run the comparison.")
+
+    clicked_idx = clickable_images(
+        images,
+        titles=titles,  # will show as tooltip on hover
+        div_style={
+            "display": "grid",
+            "grid-template-columns": "repeat(3, minmax(0, 1fr))",
+            "gap": "0.75rem",
+            "justify-items": "center",
+            "align-items": "center",
+            "padding": "0.5rem",
+        },
+        img_style={
+            "border-radius": "12px",
+            "border": "2px solid #e0e0e0",
+            "box-shadow": "0 4px 10px rgba(0,0,0,0.08)",
+            "cursor": "pointer",
+            "width": "100%",
+            "object-fit": "cover",
+        },
+        key="edu_clickable_grid",
+    )
+
+    if clicked_idx > -1:
+        # Map back to filename + PIL image, then reuse existing handler
+        fname = items[clicked_idx]["filename"]
+        try:
+            pil_img = _load_pil_from_filename(fname)
+        except Exception as exc:  # noqa: BLE001
+            st.error(f"Failed to load {fname}: {exc}")
+            return
+
+        _handle_compare_dataset_example(state, fname, pil_img)
+
+
+
 def _handle_compare_dataset_example(
     state: Dict[str, Any],
     filename: str,
@@ -255,7 +295,6 @@ def _handle_compare_dataset_example(
         st.warning("Please select both Model 1 and Model 2.")
         return
 
-    # Load raw bytes from disk to send to backend
     path = os.path.join(VALIDATION_IMAGES_DIR, filename)
     try:
         with open(path, "rb") as f:
@@ -264,9 +303,18 @@ def _handle_compare_dataset_example(
         st.error(f"Could not read image file {path}: {exc}")
         return
 
-    image_tuple = (filename, img_bytes, "image/jpeg")  # adjust mime if needed
+    image_tuple = (filename, img_bytes, "image/jpeg")
 
     state["api_error"] = None
+
+    # NEW: toast when user clicks a thumbnail
+    try:
+        st.toast(
+            f"Running comparison and Grad-CAM on example {filename}...",
+            icon="⏳",
+        )
+    except Exception:
+        st.info(f"Running comparison and Grad-CAM on example {filename}...")
 
     with st.spinner("Running comparison and Grad-CAM on selected example..."):
         try:
@@ -288,45 +336,8 @@ def _handle_compare_dataset_example(
     state["current_image_filename"] = filename
     state["current_image_pil"] = pil_image
     state["selected_example_filename"] = filename
-    state["uploaded_image"] = None  # to avoid confusion
+    state["uploaded_image"] = None
 
-    try:
-        st.toast("Comparison ready!", icon="📊")
-    except Exception:
-        st.success("Comparison ready!")
-
-
-def _handle_compare(state: Dict[str, Any]) -> None:
-    model_1_id = state["model_1_id"]
-    model_2_id = state["model_2_id"]
-    img = state["example_image"]
-
-    if model_1_id is None or model_2_id is None:
-        st.warning("Please select both Model 1 and Model 2.")
-        return
-    if img is None:
-        st.warning("Please upload an image to compare on.")
-        return
-
-    state["api_error"] = None
-
-    with st.spinner("Running comparison and Grad-CAM..."):
-        try:
-            result = call_compare_api(
-                image=img,
-                model_1=model_1_id,
-                model_2=model_2_id,
-                method="grad_cam",
-            )
-        except Exception as exc:  # noqa: BLE001
-            state["api_error"] = str(exc)
-            try:
-                st.toast(f"Comparison failed: {exc}", icon="❌")
-            except Exception:
-                st.error(f"Comparison failed: {exc}")
-            return
-
-    state["comparison_result"] = result
     try:
         st.toast("Comparison ready!", icon="📊")
     except Exception:
@@ -675,12 +686,8 @@ def _render_explainability_section(
     hm1 = heatmaps1.get(focus)
     hm2 = heatmaps2.get(focus)
 
-    uploaded = state.get("example_image")
-    base_image: Optional[Image.Image] = state.get("current_image_pil")
-    if uploaded is not None:
-        # Convert UploadedFile to PIL Image
-        base_image = Image.open(uploaded).convert("RGB")
 
+    base_image: Optional[Image.Image] = state.get("current_image_pil")
     col1, col2 = st.columns(2)
 
     with col1:

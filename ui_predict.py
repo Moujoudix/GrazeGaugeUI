@@ -16,6 +16,7 @@ from config import (
     BIOMASS_UNIT,
     MODEL_METADATA,
     MODEL_ORDER,
+    CORE_BIOMASS_KEYS,
 )
 from api_client import call_predict_api
 
@@ -323,13 +324,20 @@ def _render_biomass_bar_chart(biomass: Dict[str, float]) -> None:
         }
     )
 
+    # Build domain & range for the color scale from your keys and dict
+    color_scale = alt.Scale(
+        domain=BIOMASS_KEYS,
+        range=[BIOMASS_COLORS[k] for k in BIOMASS_KEYS],
+    )
+
     chart = (
         alt.Chart(data)
         .mark_bar()
         .encode(
             x=alt.X("Biomass:N", sort=None, title="Biomass type"),
             y=alt.Y("Value:Q", title=f"Value ({BIOMASS_UNIT})"),
-            color=alt.Color("Biomass:N", legend=None),
+            color=alt.Color("Key:N", scale=color_scale, legend=None),
+            tooltip=["Biomass", "Value"],
         )
         .properties(height=300)
     )
@@ -339,8 +347,8 @@ def _render_biomass_bar_chart(biomass: Dict[str, float]) -> None:
 
 def _render_biomass_radar_chart(biomass: Dict[str, float]) -> None:
     # Radar chart using Plotly
-    categories = [BIOMASS_DISPLAY[k] for k in BIOMASS_KEYS]
-    values = [biomass.get(k, 0.0) for k in BIOMASS_KEYS]
+    categories = [BIOMASS_DISPLAY[k] for k in CORE_BIOMASS_KEYS]
+    values = [biomass.get(k, 0.0) for k in CORE_BIOMASS_KEYS]
     # Close the loop
     categories += [categories[0]]
     values += [values[0]]

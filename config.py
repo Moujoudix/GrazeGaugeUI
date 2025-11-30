@@ -22,7 +22,7 @@ API_TIMEOUT_SECONDS = 60  # a bit higher for Grad-CAM in /compare
 # -----------------------------------------------------------------------------
 # App-level config
 # -----------------------------------------------------------------------------
-APP_TITLE = "PastureVision: Estimating Pasture Biomass from Images"
+APP_TITLE = "🍀 GrazeGauge 🍀: Estimating Pasture Biomass from Images"
 APP_SUBTITLE = (
     "Upload pasture images to estimate green, clover, dead, and total biomass "
     "and explore how different models behave."
@@ -50,10 +50,10 @@ BIOMASS_DISPLAY: Dict[str, str] = {
 BIOMASS_UNIT = "g"
 
 BIOMASS_COLORS: Dict[str, str] = {
-    "Dry_Green_g": "#4CAF50",
-    "Dry_Clover_g": "#2E7D32",
-    "Dry_Dead_g": "#8D6E63",
-    "GDM_g": "#607D8B",
+    "Dry_Green_g": "#319D17",
+    "Dry_Clover_g": "#3EA055",
+    "Dry_Dead_g": "#FFBD13",
+    "GDM_g": "#0D2313",
     "Dry_Total_g": "#212121",
 }
 

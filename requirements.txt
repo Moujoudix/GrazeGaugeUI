@@ -5,6 +5,7 @@ plotly
 streamlit
 requests
 st-clickable-images>=0.0.3
+streamlit-option-menu>=0.3.6
 
 # Data science
 pandas
