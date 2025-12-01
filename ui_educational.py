@@ -1,6 +1,7 @@
 from __future__ import annotations
 from typing import Any, Dict, Optional, Tuple, List, Union
 from streamlit.runtime.uploaded_file_manager import UploadedFile
+import io
 import os
 import numpy as np
 import pandas as pd
@@ -645,11 +646,40 @@ def _render_summary_with_optional_gt(
             f"- Mean predicted biomass for **{model_2_name}**: `{mean2:.3f}` g"
         )
 
-
-
 # -----------------------------------------------------------------------------
 # Explainability (Grad-CAM overlays)
 # -----------------------------------------------------------------------------
+
+def _show_explanation_overlay(
+    hm: Dict[str, Any],
+) -> None:
+    """
+    Display a pre-rendered Grad-CAM overlay sent by the backend.
+
+    Expected format from the API:
+      {
+        "image_format": "png",
+        "width": W,
+        "height": H,
+        "data_b64": "<base64-encoded PNG/JPEG bytes>"
+      }
+    """
+    data_b64 = hm.get("data_b64")
+    if not data_b64:
+        st.warning("Heatmap is missing 'data_b64'.")
+        return
+
+    try:
+        img_bytes = base64.b64decode(data_b64)
+        img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+    except Exception as exc:  # noqa: BLE001
+        st.error(f"Failed to decode heatmap overlay: {exc}")
+        return
+
+    # Let Streamlit handle sizing inside the column
+    st.image(img, width='stretch')
+
+
 def _render_explainability_section(
     state: Dict[str, Any],
     m1: Dict[str, Any],
@@ -669,165 +699,33 @@ def _render_explainability_section(
     )
     state["focus"] = focus
 
-    expl1 = m1.get("explanation", {})
-    expl2 = m2.get("explanation", {})
+    expl1 = m1.get("explanation", {}) or {}
+    expl2 = m2.get("explanation", {}) or {}
 
-    heatmaps1 = expl1.get("heatmaps", {})
-    heatmaps2 = expl2.get("heatmaps", {})
-
-    # Per-model normalisation: global vmin/vmax across the three focus targets
-    vmin1, vmax1 = _compute_global_range(
-        [heatmaps1.get(k) for k in FOCUS_OPTIONS if heatmaps1.get(k) is not None]
-    )
-    vmin2, vmax2 = _compute_global_range(
-        [heatmaps2.get(k) for k in FOCUS_OPTIONS if heatmaps2.get(k) is not None]
-    )
+    heatmaps1 = expl1.get("heatmaps", {}) or {}
+    heatmaps2 = expl2.get("heatmaps", {}) or {}
 
     hm1 = heatmaps1.get(focus)
     hm2 = heatmaps2.get(focus)
 
-
-    base_image: Optional[Image.Image] = state.get("current_image_pil")
     col1, col2 = st.columns(2)
 
     with col1:
         st.markdown(f"**Model 1: {model_1_name}**")
         if hm1 is not None:
-            if base_image is not None:
-                _show_overlay(base_image, hm1, vmin=vmin1, vmax=vmax1)
-            else:
-                _show_heatmap_values(hm1, vmin=vmin1, vmax=vmax1)
+            _show_explanation_overlay(hm1)
         else:
             st.warning(f"No heatmap for {FOCUS_TO_LABEL.get(focus, focus)}.")
 
     with col2:
         st.markdown(f"**Model 2: {model_2_name}**")
         if hm2 is not None:
-            if base_image is not None:
-                _show_overlay(base_image, hm2, vmin=vmin2, vmax=vmax2)
-            else:
-                _show_heatmap_values(hm2, vmin=vmin2, vmax=vmax2)
+            _show_explanation_overlay(hm2)
         else:
             st.warning(f"No heatmap for {FOCUS_TO_LABEL.get(focus, focus)}.")
 
     st.caption(
-        "These Grad-CAM heatmaps highlight where each model focused when predicting "
-        "the selected biomass component. Hotter regions indicate higher importance. "
-        "Colors are normalised per model across the three focus targets."
+        "These Grad-CAM heatmaps are pre-rendered on the backend. "
+        "They highlight where each model focused when predicting the selected biomass component. "
+        "Hotter regions indicate higher importance."
     )
-
-
-# -----------------------------------------------------------------------------
-# Heatmap utilities
-# -----------------------------------------------------------------------------
-def _compute_global_range(hms: List[Dict[str, Any]]) -> Tuple[float, float]:
-    """
-    Compute global min/max across a list of heatmaps (each with 'values').
-    Used for per-model normalisation across multiple targets.
-    """
-    all_vals = []
-    for hm in hms:
-        if hm is None:
-            continue
-        vals = hm.get("values")
-        if vals is None:
-            continue
-        arr = np.array(vals, dtype=float)
-        arr = np.nan_to_num(arr)
-        all_vals.append(arr.ravel())
-
-    if not all_vals:
-        return 0.0, 1.0
-
-    stacked = np.concatenate(all_vals)
-    return float(stacked.min()), float(stacked.max())
-
-
-def _heatmap_to_rgb(
-    values: Any,
-    vmin: float,
-    vmax: float,
-    cmap_name: str = "jet",
-) -> np.ndarray:
-    """
-    Convert a 2D heatmap + shared vmin/vmax into RGB uint8.
-    """
-    arr = np.array(values, dtype=float)  # [H, W]
-    arr = np.nan_to_num(arr)
-
-    if vmax <= vmin:
-        norm = np.zeros_like(arr)
-    else:
-        norm = (arr - vmin) / (vmax - vmin)
-        norm = np.clip(norm, 0.0, 1.0)
-
-    cmap = cm.get_cmap(cmap_name)
-    rgb = cmap(norm)[..., :3]  # [H, W, 3] floats in [0,1]
-    rgb_u8 = (rgb * 255).astype(np.uint8)
-    return rgb_u8
-
-
-def _show_heatmap_values(
-    hm: Dict[str, Any],
-    vmin: Optional[float] = None,
-    vmax: Optional[float] = None,
-    cmap_name: str = "jet",
-) -> None:
-    """
-    Fallback: show heatmap alone (no overlay).
-    """
-    values = hm.get("values")
-    if values is None:
-        st.warning("Heatmap has no 'values' field.")
-        return
-
-    arr = np.array(values, dtype=float)
-    arr = np.nan_to_num(arr)
-
-    if vmin is None or vmax is None:
-        vmin = float(arr.min())
-        vmax = float(arr.max())
-
-    rgb_u8 = _heatmap_to_rgb(arr, vmin=vmin, vmax=vmax, cmap_name=cmap_name)
-    st.image(rgb_u8, width='stretch')
-
-
-def _show_overlay(
-    base_image: Image.Image,
-    hm: Dict[str, Any],
-    vmin: Optional[float] = None,
-    vmax: Optional[float] = None,
-    alpha: float = 0.35,
-    cmap_name: str = "jet",
-) -> None:
-    """
-    Overlay a heatmap onto the original image using the given vmin/vmax.
-    """
-    values = hm.get("values")
-    if values is None:
-        st.warning("Heatmap has no 'values' field.")
-        return
-
-    arr = np.array(values, dtype=float)
-    arr = np.nan_to_num(arr)
-
-    if vmin is None or vmax is None:
-        vmin = float(arr.min())
-        vmax = float(arr.max())
-
-    # Heatmap RGB
-    rgb_hm = _heatmap_to_rgb(arr, vmin=vmin, vmax=vmax, cmap_name=cmap_name)
-    H, W, _ = rgb_hm.shape
-
-    # Resize original image to match heatmap resolution
-    base_resized = base_image.resize((W, H))
-    base_np = np.array(base_resized, dtype=np.float32) / 255.0
-    if base_np.ndim == 2:  # grayscale
-        base_np = np.stack([base_np] * 3, axis=-1)
-
-    hm_np = rgb_hm.astype(np.float32) / 255.0
-
-    overlay = (1.0 - alpha) * base_np + alpha * hm_np
-    overlay_u8 = (overlay * 255).astype(np.uint8)
-
-    st.image(overlay_u8, width='stretch')

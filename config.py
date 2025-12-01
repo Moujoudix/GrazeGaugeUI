@@ -8,10 +8,11 @@ from typing import Dict, List, Any
 # For local dev:
 LOCAL_API_BASE = "http://localhost:8000"
 # For deployed Cloud Run:
-CLOUD_API_BASE = "https://grazegauge-api-415044706954.europe-west1.run.app"
+CLOUD_API_BASE = "https://grazegauge-api-1023154671986.europe-west1.run.app"
 
 # Choose which one to use; you can control via env var if you want
 API_BASE_URL = os.getenv("GRAZEGAUGE_API_BASE", LOCAL_API_BASE)
+#API_BASE_URL = os.getenv("GRAZEGAUGE_API_BASE", CLOUD_API_BASE)
 
 MODELS_URL = f"{API_BASE_URL}/models"
 PREDICT_URL = f"{API_BASE_URL}/predict"
