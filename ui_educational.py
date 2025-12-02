@@ -25,11 +25,28 @@ from config import (
     N_EDU_GRID_IMAGES,
 )
 
-# Relative thresholds (tune as you want)
-CLOSE_REL = 0.05   # both models considered "close" if <= 10% relative error
-FAR_REL   = 0.2   # considered "far" if >= 50% relative error
-DIFF_REL  = 0.10   # difference in relative error considered "large" if >= 10 points
 
+# Relative thresholds for models' errors
+CLOSE_REL = 0.05   # both models considered "close" if <= 5% relative error
+FAR_REL   = 0.2   # considered "far" if >= 20% relative error
+DIFF_REL  = 0.10   # difference in relative error considered "large" if >= 10%
+
+# orders for labels
+BIOMASS_ORDER = [
+    BIOMASS_DISPLAY["Dry_Green_g"],
+    BIOMASS_DISPLAY["Dry_Clover_g"],
+    BIOMASS_DISPLAY["Dry_Dead_g"],
+    BIOMASS_DISPLAY["GDM_g"],
+    BIOMASS_DISPLAY["Dry_Total_g"],
+]
+
+
+# colors for charts
+COLORS = {
+    "gt" : "#bea925",
+    "model1" : "#2596be",
+    "model2" : "#2587be",
+}
 
 @st.cache_data
 def load_ground_truth_table() -> pd.DataFrame:
@@ -172,7 +189,7 @@ def _render_educational_controls(state: Dict[str, Any]) -> None:
     st.markdown("**2. Choose an image**")
 
     use_custom = st.checkbox(
-        "Use your own image (upload)",
+        "Use your own image",
         key="edu_use_custom_image",
         value=state.get("use_custom_image", False),
     )
@@ -440,7 +457,7 @@ def _render_comparison_bar_chart(
         )
         df_parts.append(df_gt)
         sources_order.append("Ground truth")
-        colors.append("#4CAF50")  # green
+        colors.append(COLORS["gt"])
 
     # Model 1 part
     df_m1 = pd.DataFrame(
@@ -452,7 +469,7 @@ def _render_comparison_bar_chart(
     )
     df_parts.append(df_m1)
     sources_order.append(model_1_name)
-    colors.append("#1565C0")  # dark blue
+    colors.append(COLORS["model1"])
 
     # Model 2 part
     df_m2 = pd.DataFrame(
@@ -464,13 +481,13 @@ def _render_comparison_bar_chart(
     )
     df_parts.append(df_m2)
     sources_order.append(model_2_name)
-    colors.append("#90CAF9")  # light blue
+    colors.append(COLORS["model2"])
 
     df = pd.concat(df_parts, ignore_index=True)
 
     base_encodings = dict(
-        x=alt.X("Biomass:N", title="Biomass type"),
-        xOffset="Source:N",
+        x=alt.X("Biomass:N", title="Biomass type", sort=BIOMASS_ORDER),
+        xOffset=alt.XOffset("Source:N", sort=sources_order),
         y=alt.Y("Value:Q", title="Value (g)"),
     )
 
@@ -482,21 +499,32 @@ def _render_comparison_bar_chart(
             **base_encodings,
             color=alt.Color(
                 "Source:N",
-                title="",
+                title="",  # or "Source" if you want a title
                 scale=alt.Scale(
                     domain=sources_order,
                     range=colors,
+                ),
+                legend=alt.Legend(
+                    orient="top",
+                    labelFontSize=13,
+                    labelFontWeight="bold",
+                    symbolSize=200,      # bigger swatches
+                    padding=8,
+                    labelLimit=0,
                 ),
             ),
         )
     )
 
+
     # Value labels on top of bars
     labels = (
         alt.Chart(df)
         .mark_text(
-            dy=-5,          # move text slightly above bar
+            dy=-5, # move text slightly above bar
+            dx=10,
             size=11,
+            align="center",
         )
         .encode(
             **base_encodings,
@@ -593,45 +621,57 @@ def _render_summary_with_optional_gt(
             return styles
 
         styled = df_core.style.apply(_style_row, axis=1).format(
-            {
-                col_gt: "{:.2f}",
-                col1: "{:+.2f}",
-                col2: "{:+.2f}",
-            }
-        )
+            {col_gt: "{:.2f}", col1: "{:+.2f}", col2: "{:+.2f}"}
+            )
 
-        # ----- header colors (works with st.table, not st.dataframe) -----
-        # columns: [Biomass, Ground truth, model1, model2]
-        # index column is first <th>, so headers are nth-child(2..4)
         styled = styled.set_table_styles(
             [
-                # GT header
+                # Global table border + collapse
+                {
+                    "selector": "table",
+                    "props": [
+                        ("border-collapse", "collapse"),
+                        ("border", "1px solid #000000"),   # outer border
+                    ],
+                },
+                # All header cells
+                {
+                    "selector": "th",
+                    "props": [("border", "1px solid #000000")],
+                },
+                # All data cells
+                {
+                    "selector": "td",
+                    "props": [("border", "1px solid #000000")],
+                },
+                {
+                    "selector": "th.col_heading.level0:nth-child(2)",
+                    "props": [("color", "black")],
+                },
+                # GT header (note: index hidden -> nth-child shifts)
                 {
                     "selector": "th.col_heading.level0:nth-child(3)",
-                    "props": [("background-color", "#4CAF50"), ("color", "white")],
+                    "props": [("background-color", COLORS["gt"]), ("color", "black")],
                 },
-                # Model 1 header
                 {
                     "selector": "th.col_heading.level0:nth-child(4)",
-                    "props": [("background-color", "#1565C0"), ("color", "white")],
+                    "props": [("background-color", COLORS["model1"]), ("color", "black")],
                 },
-                # Model 2 header
                 {
                     "selector": "th.col_heading.level0:nth-child(5)",
-                    "props": [("background-color", "#90CAF9"), ("color", "black")],
+                    "props": [("background-color", COLORS["model2"]), ("color", "black")],
                 },
+
+                # hide index header + index cells
+                {"selector": "th.row_heading", "props": [("display", "none")]},
+                {"selector": "th.blank", "props": [("display", "none")]},
             ],
             overwrite=False,
         )
 
-        # IMPORTANT: use st.table, not st.dataframe
         st.table(styled)
 
-        st.caption(
-            "Signed error = Ground truth − prediction (grams). "
-            "Cell background uses **relative error** per component (close vs far), "
-            "while header colors match the bar chart legend."
-        )
+        st.caption("Signed relative error = (Ground truth - prediction) / Ground truth ")
 
     else:
         st.markdown("### Summary (no ground truth available)")

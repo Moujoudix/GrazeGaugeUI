@@ -8,7 +8,15 @@ from ui_about import render_about_page
 from api_client import fetch_models
 from streamlit_option_menu import option_menu
 
-
+st.markdown("""
+<style>
+    /* slightly tighter layout */
+    .block-container {
+        padding-top: 1.5rem;
+        padding-bottom: 2rem;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 
 def setup_page() -> None:
