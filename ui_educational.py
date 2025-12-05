@@ -816,7 +816,6 @@ def _render_explainability_section(
             st.warning(f"No heatmap for {FOCUS_TO_LABEL.get(focus, focus)}.")
 
     st.caption(
-        "These Grad-CAM heatmaps are pre-rendered on the backend. "
-        "They highlight where each model focused when predicting the selected biomass component. "
+        "These Grad-CAM heatmaps highlight where each model focused when predicting the selected biomass component. "
         "Hotter regions indicate higher importance."
     )

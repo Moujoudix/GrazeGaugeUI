@@ -23,7 +23,7 @@ API_TIMEOUT_SECONDS = 60  # a bit higher for Grad-CAM in /compare
 # -----------------------------------------------------------------------------
 # App-level config
 # -----------------------------------------------------------------------------
-APP_TITLE = "🍀 GrazeGauge 🍀: Estimating Pasture Biomass from Images"
+APP_TITLE = "🍀 GreenVision 🍀: Estimating Pasture Biomass from Images"
 APP_SUBTITLE = (
     "Upload pasture images to estimate green, clover, dead, and total biomass "
     "and explore how different models behave."
