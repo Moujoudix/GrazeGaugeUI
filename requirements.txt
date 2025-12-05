@@ -1,5 +1,6 @@
 # Data Viz
 plotly
+matplotlib
 
 # Sreamlit and extensions
 streamlit
