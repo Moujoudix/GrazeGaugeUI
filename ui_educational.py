@@ -138,6 +138,10 @@ def init_educational_state() -> None:
             "comparison_result": None,
             "focus": FOCUS_OPTIONS[0],
             "api_error": None,
+
+            # Comparison deduplication
+            "last_dataset_signature": None,      # (filename, model_1_id, model_2_id)
+            "last_clicked_example_idx": -1,      # NEW
         }
 
 
@@ -249,6 +253,7 @@ def _handle_compare_custom(state: Dict[str, Any]) -> None:
     state["current_image_filename"] = img.name
     state["current_image_pil"] = Image.open(img).convert("RGB")
     state["selected_example_filename"] = None  # not a dataset example
+    state["last_dataset_signature"] = None
 
     try:
         st.toast("Comparison ready!", icon="📊")
@@ -268,7 +273,7 @@ def _render_example_grid(state: Dict[str, Any]) -> None:
 
     clicked_idx = clickable_images(
         images,
-        titles=titles,  # will show as tooltip on hover
+        titles=titles,  # tooltip on hover
         div_style={
             "display": "grid",
             "grid-template-columns": "repeat(3, minmax(0, 1fr))",
@@ -288,16 +293,62 @@ def _render_example_grid(state: Dict[str, Any]) -> None:
         key="edu_clickable_grid",
     )
 
-    if clicked_idx > -1:
-        # Map back to filename + PIL image, then reuse existing handler
-        fname = items[clicked_idx]["filename"]
-        try:
-            pil_img = _load_pil_from_filename(fname)
-        except Exception as exc:  # noqa: BLE001
-            st.error(f"Failed to load {fname}: {exc}")
-            return
+    # ---------------------------------------------------------
+    # Figure out which filename should be highlighted
+    # ---------------------------------------------------------
+    selected_fname = None
 
-        _handle_compare_dataset_example(state, fname, pil_img)
+    # 1) If there was a click in this run, prefer that
+    if clicked_idx is not None and clicked_idx >= 0 and clicked_idx < len(items):
+        selected_fname = items[clicked_idx]["filename"]
+    # 2) Otherwise, fall back to whatever was selected previously
+    elif state.get("selected_example_filename"):
+        selected_fname = state["selected_example_filename"]
+
+    # Inject CSS to strongly highlight the selected thumbnail
+    if selected_fname:
+        st.markdown(
+            f"""
+            <style>
+            img[title="{selected_fname}"] {{
+                border: 50px solid #FF6D00 !important;
+                box-shadow: 0 0 20px rgba(255, 109, 0, 0.9) !important;
+                border-radius: 14px !important;
+                filter: brightness(1.12) saturate(1.1);
+                transform: scale(1.03);
+                transition: all 0.12s ease-in-out;
+            }}
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    # Optional small text cue
+    if selected_fname:
+        st.caption(f"Selected example: **{selected_fname}**")
+
+    # ---------------------------------------------------------
+    # Trigger comparison ONLY when needed
+    # ---------------------------------------------------------
+    if clicked_idx is None or clicked_idx < 0 or clicked_idx >= len(items):
+        return  # nothing clicked this run
+
+    fname = items[clicked_idx]["filename"]
+    sig = (fname, state.get("model_1_id"), state.get("model_2_id"))
+
+    # If same image + same models as last comparison, do nothing
+    if sig == state.get("last_dataset_signature"):
+        return
+
+    state["last_dataset_signature"] = sig
+
+    try:
+        pil_img = _load_pil_from_filename(fname)
+    except Exception as exc:  # noqa: BLE001
+        st.error(f"Failed to load {fname}: {exc}")
+        return
+
+    _handle_compare_dataset_example(state, fname, pil_img)
 
 
 
