@@ -1,4 +1,4 @@
-# GreenVision – Pasture Biomass Viewer (Streamlit UI)
+# 🍀 GreenVision 🍀 – Pasture Biomass Viewer
 
 Interactive Streamlit front-end for exploring pasture biomass predictions from a FastAPI inference service.
 
