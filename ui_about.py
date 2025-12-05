@@ -28,14 +28,11 @@ explore how AI can support grazing management and farm decision-making.
 def _render_team() -> None:
     st.subheader("Team")
 
-    # TODO: replace with your actual names & roles
     st.markdown(
         """
-- **Alice** – Model development & experimentation
-- **Bob** – MLOps, backend API, Docker & Google Cloud
-- **Charlie** – Streamlit UI, visualizations & Educational Lab
-
-_Add your real team members and roles here._
+- **I. Moujoud** – project lead; led data exploration and analysis, designed and trained the initial baseline models, created the shared model backbone used across all experiments and model families, set up the project packaging and MLOps, and led the production-ready cloud deployment and polishing of the Streamlit interface (frontend & backend).
+- **Kamil Laroui** – co-developer; contributed to baseline modelling, explored alternative computer-vision model families, and implemented the initial MLOps-focused cloud deployment prototype (adapting the codebase for Docker, API serving, and Streamlit integration).
+- **Iz** – model evaluation and testing; focused on systematically testing model families, comparing performance, and providing feedback that guided model and UX refinements.
 """
     )
 
